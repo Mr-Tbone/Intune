@@ -22,6 +22,7 @@
 
 .RELEASENOTES
     1.0 2022-02-18 Initial Build
+    1.1 Changed Get-AuthTokenClientSecret to not require AzureAD Module
 
 .AUTHOR
     Tbone Granheden @MrTbone_se
@@ -37,6 +38,7 @@
 
 .CHANGELOG
     1.0.2202.1 - Initial Version
+    1.1.2203.1 - Changed Get-AuthTokenClientSecret to not require AzureAD Module
 #>
 
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
@@ -46,7 +48,7 @@
 #region ---------------------------------------------------[Script Parameters]-----------------------------------------------
 
 param (
-    #change this attribute if you want to get devices enrolled within the last ‘n’ minutes. 
+    #change this attribute if you want to get devices enrolled within the last X minutes. 
     #Change this to 0 to get all devices. The time is in minutes.
     #1440 is 24 hours
     [int]$filterByEnrolledWithinMinutes=0
@@ -54,27 +56,33 @@ param (
 #endregion
 
 #region ---------------------------------------------------[Modifiable Parameters and defaults]------------------------------------
-#Azure AD  App Details for Auth
-$global:tenant = "sirtbone.onmicrosoft.com"
-$global:clientId = "6f7b0eeb-3367-4052-9ea6-0fd03401f6be"
-$global:clientSecret = "oJy7Q~evvkTKzulAGRY2HK29XE7.yT3vRVtHG"
+#Azure AD Authentication settings
+$global:tenant          = "Tbone.onmicrosoft.com"
+#Granttype can be Password for serviceaccount with password login or client_credentials for application login
+$global:granttype       = "password" #"client_credentials" # Password
+#user info if using service account
+$global:UserID          = "admin@Tbone.onmicrosoft.com"
+$global:password        = "Password" #Not needed if using granttype: client_credentials
+#app info if using Azure Application
+$global:clientId        = "6f7b0eeb-3367-4052-9ea6-0fd03401f6be"
+$global:clientSecret    = "SecretKey"
 
-#set to true to filter the devices retrieved to personal devices
-$OsFilter = @("iOS","Android")
-$UpdateOnlyPersonalOnly=$false
+#Filtering Options
+$FilterOperatingSystems     = @("iOS","Android")
+$FilterOnlyPersonalOwned    = $false
 
 #Record the list of user group to scope tag group mapping here
 $UserToGroupMapping=@()
 $CountryGroups = @{                         
-        UserGroupID            = "aef1fdde-12a9-4bc2-a5ca-098b441582dd" #User Group NL
-        ScopeTagGroupID    = "1c837874-6bb9-4627-8d20-124068ee3c44" # Device Group NL
+        UserGroupID     = "aef1fdde-12a9-4bc2-a5ca-098b441582dd" #User Group NL
+        ScopeTagGroupID = "1c837874-6bb9-4627-8d20-124068ee3c44" # Device Group NL
         }                                              
-$UserToGroupMapping+=(New-Object PSObject -Property $CountryGroups
+$UserToGroupMapping+=(New-Object PSObject -Property $CountryGroups)
 $CountryGroups = @{                       
-        UserGroupID             = "a19e3daa-58b3-4933-bf07-236dc14c76ca" #User Group SE
-        ScopeTagGroupID    = "96a94252-b247-4e8c-a908-96081a736cbe"   # Device Group SE
+        UserGroupID     = "a19e3daa-58b3-4933-bf07-236dc14c76ca" #User Group SE
+        ScopeTagGroupID = "96a94252-b247-4e8c-a908-96081a736cbe" # Device Group SE
         }                                              
-$UserToGroupMapping+=(New-Object PSObject -Property $CountryGroups)                                             
+$UserToGroupMapping+=(New-Object PSObject -Property $CountryGroups)                                                
 
 #endregion
 
@@ -87,43 +95,23 @@ $UserToGroupMapping+=(New-Object PSObject -Property $CountryGroups)
 $cachedUserGroupMemberships=@()
 #Verbose settings
 $global:VerbosePreference = 'SilentlyContinue'
-
 #endregion
 
 #region ---------------------------------------------------[Import Modules and Extensions]-----------------------------------------
-$AadModule = Get-Module -Name "AzureAD" -ListAvailable
-if ($null -eq $AadModule) {
-    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
-    install-module AzureAD -Force
-    $AadModule = Get-Module -Name "AzureAD" -ListAvailable
-    }
-# Getting path to ActiveDirectory Assemblies
-# If the module count is greater than 1 find the latest version
-if($AadModule.count -gt 1){
-    $Latest_Version = ($AadModule | select version | Sort-Object)[-1]
-    $aadModule = $AadModule | ? { $_.version -eq $Latest_Version.version }
-    # Checking if there are multiple versions of the same module found
-    if($AadModule.count -gt 1){
-        $aadModule = $AadModule | select -Unique
-    }
-    $adal = Join-Path $AadModule.ModuleBase "Microsoft.IdentityModel.Clients.ActiveDirectory.dll"
-} else {
-    $adal = Join-Path $AadModule.ModuleBase "Microsoft.IdentityModel.Clients.ActiveDirectory.dll"
-}
-[System.Reflection.Assembly]::LoadFrom($adal) | Out-Null
+
 #endregion
 
 #region ---------------------------------------------------[Functions]------------------------------------------------------------
-function Get-AuthToken {
+function Verify-AuthToken {
     [cmdletbinding()]
     param (
     )
     #variables
     $DateTime = (Get-Date).ToUniversalTime()
     # Checking if authToken exists before running authentication, If the authToken exists checking when it expires
-    $TokenExpires = ($global:authToken.ExpiresOn.datetime - $DateTime).Minutes
+    $TokenExpires = ($global:authToken.ExpiresOn - $DateTime).Minutes
     if($TokenExpires -le 1){
-        write-host "Authentication Token expired" $TokenExpires "minutes ago. Updating Token" -ForegroundColor Yellow
+        write-verbose "Authentication Token expired $TokenExpires minutes ago. Updating Token" -ForegroundColor Yellow
         $global:authToken = Get-AuthTokenClientSecret
     }
 }
@@ -135,32 +123,41 @@ function Get-AuthTokenClientSecret {
     param (
     )
     #variables
-    $resourceAppIdURI = "https://graph.microsoft.com"
-    $authority = "https://login.microsoftonline.com/$global:tenant"
+    $ReqTokenBody = @{
+    Grant_Type    = $global:GrantType
+    client_Id     = $global:clientID
+    Client_Secret = $global:clientSecret
+    Username      = $global:UserID
+    Password      = $global:Password
+    Scope         = "https://graph.microsoft.com/.default"
+    } 
 
     try {
-        $authContext = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext" -ArgumentList $authority
-        $clientCredential = New-Object -TypeName "Microsoft.IdentityModel.Clients.ActiveDirectory.ClientCredential"($global:clientId, $global:clientSecret)
-        $authResult=$authContext.AcquireTokenAsync($resourceAppIdURI, $clientCredential).result
-
-        # If the accesstoken is valid then create the authentication header
-        if($authResult.AccessToken){
+        $TokenResponse = Invoke-RestMethod -Uri "https://login.microsoftonline.com/$Global:Tenant/oauth2/v2.0/token" -Method POST -Body $ReqTokenBody
+        if($TokenResponse.Access_Token){
             # Creating header for Authorization token
             $authHeader = @{
                 'Content-Type'='application/json'
-                'Authorization'="Bearer " + $authResult.AccessToken
-                'ExpiresOn'=$authResult.ExpiresOn
+                'Authorization'="Bearer " + $TokenResponse.Access_Token
+                'ExpiresOn'= (get-date).AddSeconds($TokenResponse.expires_in)
                 }
             return $authHeader
         }
-        else {
+    else {
             write-error "Authorization Access Token is null, please re-run authentication..."
             break
         }
     }
     catch {
-        write-output $_.Exception.Message 
-        write-output $_.Exception.ItemName 
+        $ex = $_.Exception
+        $errorResponse = $ex.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($errorResponse)
+        $reader.BaseStream.Position = 0
+        $reader.DiscardBufferedData()
+        $responseBody = $reader.ReadToEnd();
+        Write-Host "Response content:`n$responseBody" -f Red
+        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+        write-host
         break
     }
 }
@@ -183,20 +180,16 @@ Function Get-UserGroups {
         $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
         (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Post -Body $body).value
     }
-    catch
-    {
+    catch {
         $ex = $_.Exception
-        If ($ex.Response) {
-            $errorResponse = $ex.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($errorResponse)
-            $reader.BaseStream.Position = 0
-            $reader.DiscardBufferedData()
-            $responseBody = $reader.ReadToEnd();
-            write-verbose "Response content:`n$responseBody" 
-            Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        } else {
-            write-error $ex.message
-        }
+        $errorResponse = $ex.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($errorResponse)
+        $reader.BaseStream.Position = 0
+        $reader.DiscardBufferedData()
+        $responseBody = $reader.ReadToEnd();
+        Write-Host "Response content:`n$responseBody" -f Red
+        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+        write-host
         break
     }
 }
@@ -241,22 +234,19 @@ Function Get-GroupMembers {
         }
         return $results
 	}
-	catch
-	{
-		$ex = $_.Exception
-        If ($ex.Response) {
-		    $errorResponse = $ex.Response.GetResponseStream()
-		    $reader = New-Object System.IO.StreamReader($errorResponse)
-		    $reader.BaseStream.Position = 0
-		    $reader.DiscardBufferedData()
-		    $responseBody = $reader.ReadToEnd();
-		    write-verbose "Response content:`n$responseBody" 
-            Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        } else {
-            write-error $ex.message
-        }
-		break
-	}
+    
+    catch {
+        $ex = $_.Exception
+        $errorResponse = $ex.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($errorResponse)
+        $reader.BaseStream.Position = 0
+        $reader.DiscardBufferedData()
+        $responseBody = $reader.ReadToEnd();
+        Write-Host "Response content:`n$responseBody" -f Red
+        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+        write-host
+        break
+    }
 }
 
 ####################################################
@@ -276,20 +266,16 @@ Function Get-User {
         $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
         Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
     }
-    catch
-    {
+    catch {
         $ex = $_.Exception
-        If ($ex.Response) {
-            $errorResponse = $ex.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($errorResponse)
-            $reader.BaseStream.Position = 0
-            $reader.DiscardBufferedData()
-            $responseBody = $reader.ReadToEnd();
-            write-verbose "Response content:`n$responseBody" 
-            Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        } else {
-            write-error $ex.message
-        }
+        $errorResponse = $ex.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($errorResponse)
+        $reader.BaseStream.Position = 0
+        $reader.DiscardBufferedData()
+        $responseBody = $reader.ReadToEnd();
+        Write-Host "Response content:`n$responseBody" -f Red
+        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+        write-host
         break
     }
 }
@@ -303,7 +289,7 @@ Function Get-Devices {
 param
 (
     $filterByEnrolledWithinMinutes,
-    $UpdateOnlyPersonalOnly
+    $FilterOnlyPersonalOwned
 )
     #variables
     $graphApiVersion = "beta"
@@ -312,11 +298,11 @@ param
     If ($filterByEnrolledWithinMinutes -and $filterByEnrolledWithinMinutes -ne 0) {
         $minutesago = "{0:s}" -f (get-date).addminutes(0-$filterByEnrolledWithinMinutes) + "Z"
         $filter = "?`$filter=enrolledDateTime ge $minutesAgo"
-        If ($UpdateOnlyPersonalOnly) {
+        If ($FilterOnlyPersonalOwned) {
             $filter ="$filter and managedDeviceOwnerType eq 'Personal'"
         }
     } else {
-        If ($UpdateOnlyPersonalOnly) {
+        If ($FilterOnlyPersonalOwned) {
             $filter ="?`$filter=managedDeviceOwnerType eq 'Personal'"
         } else {
             $filter = ""
@@ -325,7 +311,7 @@ param
     try
     {
         $results=@()
-        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)$($filter)"
+        $uri = "https://graph.microsoft.com////$graphApiVersion/$($Resource)$($filter)"
         $result=Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
         $results+=$result
 
@@ -349,20 +335,16 @@ param
         }
         return $results
     }
-    catch
-    {
+    catch {
         $ex = $_.Exception
-        If ($ex.Response) {
-            $errorResponse = $ex.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($errorResponse)
-            $reader.BaseStream.Position = 0
-            $reader.DiscardBufferedData()
-            $responseBody = $reader.ReadToEnd();
-            write-verbose "Response content:`n$responseBody" 
-            Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        } else {
-            write-error $ex.message
-        }
+        $errorResponse = $ex.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($errorResponse)
+        $reader.BaseStream.Position = 0
+        $reader.DiscardBufferedData()
+        $responseBody = $reader.ReadToEnd();
+        Write-Host "Response content:`n$responseBody" -f Red
+        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+        write-host
         break
     }
 }
@@ -386,22 +368,18 @@ try
 		$uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
 		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value.id
 	}
-	catch
-	{
-		$ex = $_.Exception
-        If ($ex.Response) {
-		    $errorResponse = $ex.Response.GetResponseStream()
-		    $reader = New-Object System.IO.StreamReader($errorResponse)
-		    $reader.BaseStream.Position = 0
-		    $reader.DiscardBufferedData()
-		    $responseBody = $reader.ReadToEnd();
-		    write-verbose "Response content:`n$responseBody" 
-            Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        } else {
-            write-error $ex.message
-        }
-		break
-	}
+    catch {
+        $ex = $_.Exception
+        $errorResponse = $ex.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($errorResponse)
+        $reader.BaseStream.Position = 0
+        $reader.DiscardBufferedData()
+        $responseBody = $reader.ReadToEnd();
+        Write-Host "Response content:`n$responseBody" -f Red
+        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+        write-host
+        break
+    }
 }
 
 ####################################################
@@ -423,17 +401,14 @@ param
     }
     catch {
         $ex = $_.Exception
-        If ($ex.Response) {
-            $errorResponse = $ex.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($errorResponse)
-            $reader.BaseStream.Position = 0
-            $reader.DiscardBufferedData()
-            $responseBody = $reader.ReadToEnd();
-            write-verbose "Response content:`n$responseBody" 
-            Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        } else {
-            write-error $ex.message
-        }
+        $errorResponse = $ex.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($errorResponse)
+        $reader.BaseStream.Position = 0
+        $reader.DiscardBufferedData()
+        $responseBody = $reader.ReadToEnd();
+        Write-Host "Response content:`n$responseBody" -f Red
+        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+        write-host
         break
     }
 }
@@ -464,20 +439,16 @@ param
         $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
         Invoke-RestMethod -Uri $uri -Headers $authToken -Method Post -Body $JSON -ContentType "application/json"
     }
-    catch
-    {
+    catch {
         $ex = $_.Exception
-        If ($ex.Response) {
-            $errorResponse = $ex.Response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($errorResponse)
-            $reader.BaseStream.Position = 0
-            $reader.DiscardBufferedData()
-            $responseBody = $reader.ReadToEnd();
-            write-verbose "Response content:`n$responseBody" 
-            Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        } else {
-            write-error $ex.message
-        }
+        $errorResponse = $ex.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($errorResponse)
+        $reader.BaseStream.Position = 0
+        $reader.DiscardBufferedData()
+        $responseBody = $reader.ReadToEnd();
+        Write-Host "Response content:`n$responseBody" -f Red
+        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+        write-host
         break
     }
 }
@@ -486,20 +457,20 @@ param
 #region ---------------------------------------------------[[Script Execution]------------------------------------------------------
 
 # Authenticate
-Get-AuthToken
+Verify-AuthToken
 
 #get devices
 IF ($filterByEnrolledWithinMinutes -ne 0) {
-    $devices=(Get-Devices -filterbyenrolledwithinminutes $filterByEnrolledWithinMinutes -UpdateOnlyPersonalOnly $UpdateOnlyPersonalOnly).value
+    $devices=(Get-Devices -filterbyenrolledwithinminutes $filterByEnrolledWithinMinutes -FilterOnlyPersonalOwned $FilterOnlyPersonalOwned).value
     } 
-else {$devices=(Get-Devices -UpdateOnlyPersonalOnly $UpdateOnlyPersonalOnly).value}
+else {$devices=(Get-Devices -FilterOnlyPersonalOwned $FilterOnlyPersonalOwned).value}
 
 #loop through devices
 foreach ($device in $devices) {
     #Verify valid access token
-    Get-AuthToken
+    Verify-AuthToken
     #filter out devices on operatingsystem
-    if ($osfilter -match [string]$device.operatingSystem -and $device.operatingSystem)
+    if ($FilterOperatingSystems -match [string]$device.operatingSystem -and $device.operatingSystem)
         {
         #Get the primary user of the device
         $PrimaryUser=Get-DeviceUsers $device.id
