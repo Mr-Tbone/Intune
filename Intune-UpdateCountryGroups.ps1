@@ -59,7 +59,7 @@ param (
 #Azure AD Authentication settings
 $global:tenant          = "Tbone.onmicrosoft.com"
 #Granttype can be Password for serviceaccount with password login or client_credentials for application login
-$global:granttype       = "password" #"client_credentials" # Password
+$global:granttype       = "password" #use method "client_credentials" or "Password"
 #user info if using service account
 $global:UserID          = "admin@Tbone.onmicrosoft.com"
 $global:password        = "Password" #Not needed if using granttype: client_credentials
