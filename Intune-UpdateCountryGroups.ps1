@@ -111,7 +111,7 @@ function Verify-AuthToken {
     # Checking if authToken exists before running authentication, If the authToken exists checking when it expires
     $TokenExpires = ($global:authToken.ExpiresOn - $DateTime).Minutes
     if($TokenExpires -le 1){
-        write-verbose "Authentication Token expired $TokenExpires minutes ago. Updating Token" -ForegroundColor Yellow
+        write-verbose "Authentication Token expired $TokenExpires minutes ago. Updating Token" 
         $global:authToken = Get-AuthTokenClientSecret
     }
 }
@@ -148,17 +148,10 @@ function Get-AuthTokenClientSecret {
             break
         }
     }
-    catch {
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        break
+catch {
+    Write-Host "The query in function $($MyInvocation.MyCommand.Name) failed with StatusCode: " $_.Exception.Response.StatusCode.value__ -f Red
+    Write-Error "Request to $Uri failed with HTTP Status:$($_.Exception.Response.StatusDescription)"
+    break
     }
 }
 
@@ -180,17 +173,10 @@ Function Get-UserGroups {
         $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
         (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Post -Body $body).value
     }
-    catch {
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        break
+catch {
+    Write-Host "The query in function $($MyInvocation.MyCommand.Name) failed with StatusCode: " $_.Exception.Response.StatusCode.value__ -f Red
+    Write-Error "Request to $Uri failed with HTTP Status:$($_.Exception.Response.StatusDescription)"
+    break
     }
 }
 
@@ -235,17 +221,10 @@ Function Get-GroupMembers {
         return $results
 	}
     
-    catch {
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        break
+catch {
+    Write-Host "The query in function $($MyInvocation.MyCommand.Name) failed with StatusCode: " $_.Exception.Response.StatusCode.value__ -f Red
+    Write-Error "Request to $Uri failed with HTTP Status:$($_.Exception.Response.StatusDescription)"
+    break
     }
 }
 
@@ -266,17 +245,10 @@ Function Get-User {
         $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
         Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
     }
-    catch {
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        break
+catch {
+    Write-Host "The query in function $($MyInvocation.MyCommand.Name) failed with StatusCode: " $_.Exception.Response.StatusCode.value__ -f Red
+    Write-Error "Request to $Uri failed with HTTP Status:$($_.Exception.Response.StatusDescription)"
+    break
     }
 }
 
@@ -335,17 +307,10 @@ param
         }
         return $results
     }
-    catch {
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        break
+catch {
+    Write-Host "The query in function $($MyInvocation.MyCommand.Name) failed with StatusCode: " $_.Exception.Response.StatusCode.value__ -f Red
+    Write-Error "Request to $Uri failed with HTTP Status:$($_.Exception.Response.StatusDescription)"
+    break
     }
 }
 
@@ -368,17 +333,10 @@ try
 		$uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
 		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value.id
 	}
-    catch {
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        break
+catch {
+    Write-Host "The query in function $($MyInvocation.MyCommand.Name) failed with StatusCode: " $_.Exception.Response.StatusCode.value__ -f Red
+    Write-Error "Request to $Uri failed with HTTP Status:$($_.Exception.Response.StatusDescription)"
+    break
     }
 }
 
@@ -399,17 +357,10 @@ param
     $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=deviceId eq '$DeviceID'"
     (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value 
     }
-    catch {
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        break
+catch {
+    Write-Host "The query in function $($MyInvocation.MyCommand.Name) failed with StatusCode: " $_.Exception.Response.StatusCode.value__ -f Red
+    Write-Error "Request to $Uri failed with HTTP Status:$($_.Exception.Response.StatusDescription)"
+    break
     }
 }
 
@@ -439,17 +390,10 @@ param
         $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
         Invoke-RestMethod -Uri $uri -Headers $authToken -Method Post -Body $JSON -ContentType "application/json"
     }
-    catch {
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        break
+catch {
+    Write-Host "The query in function $($MyInvocation.MyCommand.Name) failed with StatusCode: " $_.Exception.Response.StatusCode.value__ -f Red
+    Write-Error "Request to $Uri failed with HTTP Status:$($_.Exception.Response.StatusDescription)"
+    break
     }
 }
 
