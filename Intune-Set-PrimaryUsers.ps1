@@ -4,7 +4,7 @@
  
 .DESCRIPTION
     This script will get the Azure Sign in logs for Windows Sign ins 
-    The script then determine who has logged on to the device most frequent the last 30 days and set the Primary user to that user
+    The script then determine who has logged on to the device the most times in the last 30 days and set the Primary user to that user
     The script uses Ms Graph with MGGraph module
         
 .EXAMPLE
@@ -40,6 +40,9 @@
 
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
 #
+#Requires -Modules Microsoft.Graph.Authentication
+#Requires -Modules Microsoft.Graph.DeviceManagement
+#Requires -Modules Microsoft.Graph.Reports
 #
 #endregion
 
@@ -48,7 +51,7 @@
 
 #region ---------------------------------------------------[Modifiable Parameters and defaults]------------------------------------
 # Customizations
-$Enrollmentaccounts = @("wds@tbone.se","wds@coligo.se") # @() = No Enrollment accounts. @("wds@tbone.se","wds2@tbone.se") = will filter them out and not assign them as primary users.
+$Enrollmentaccounts = @("wds@tbone.se","wds2@tbone.se") # @() = No Enrollment accounts. @("wds@tbone.se","wds2@tbone.se") = will filter them out and not assign them as primary users.
 $AzureAutomation = $True                # $True = The script will be executed in Azure Automation. $False The script will be executed manually 
 $VerbosePreference = "SilentlyContinue" # "SilentlyContinue" = Doesn't display the verbose message. Continues executing. "Continue" = Show Verbose Messages
 
