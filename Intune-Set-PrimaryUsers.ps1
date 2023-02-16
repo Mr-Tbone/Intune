@@ -53,6 +53,7 @@
 # Customizations
 $Enrollmentaccounts = @("wds@tbone.se","wds2@tbone.se") # @() = No Enrollment accounts. @("wds@tbone.se","wds2@tbone.se") = will filter them out and not assign them as primary users.
 $AzureAutomation = $True                # $True = The script will be executed in Azure Automation. $False The script will be executed manually 
+$ExecutionMode = "Prod"                 # "Test" = No changes will be made on Primary owner, "Prod" = Primary Owner will be changes
 $VerbosePreference = "SilentlyContinue" # "SilentlyContinue" = Doesn't display the verbose message. Continues executing. "Continue" = Show Verbose Messages
 
 #endregion
@@ -147,7 +148,8 @@ if (($IntuneDevices) -and ($SignInLogs))
             $uri = "https://graph.microsoft.com/beta/deviceManagement/managedDevices('$IntuneDeviceID')/users/`$ref"
             $Body = @{ "@odata.id" = "https://graph.microsoft.com/beta/users/$MostFrequentUserid" } | ConvertTo-Json
             $Method = "POST"
-            Invoke-MgGraphRequest -Method $Method -uri $uri -body $Body
+            if ($ExecutionMode -ne "Test")
+            {Invoke-MgGraphRequest -Method $Method -uri $uri -body $Body}
             }
         else{if (!$MostFrequentUserPrincipalname){write-Output "Device $($IntuneDevice.DeviceName) has no logins last 30 days"}
             else {write-Output "Device $($IntuneDevice.DeviceName) have correct Primary User"}
