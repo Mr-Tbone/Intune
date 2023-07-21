@@ -79,46 +79,34 @@ $RegistryKeys = @(
 #endregion
 
 #region ------------------------------------------------------[Functions]--------------------------------------------------------
-Function Remediate-RegistryKeys {
+Function Detect-RegistryKeys {
     Param(
         [array]$RegistryKeys
     )
     Begin {}
     Process {
-        foreach ($Key in $RegistryKeys) {
+        Foreach ($Key in $RegistryKeys) {
             $RegKeyPath = $Key.RegKeyPath
             $RegKeyValue = $Key.RegKeyValue
             $RegKeyName = $Key.RegKeyName
             $ExistingValue = $null
-            $NewRegValue = $null
-            $NewRegKey = $null
-
-            if (Test-Path -Path $RegKeyPath -ErrorAction Ignore) {
-                $ExistingValue = (Get-ItemProperty -Path "$($RegKeyPath)" -Name $RegKeyName -ErrorAction silentlycontinue).$RegKeyName
+            if (Test-Path -Path "$($RegKeyPath)" -ErrorAction silentlycontinue) {
+                $ExistingValue = (Get-ItemProperty -Path "$($Key.RegKeyPath)" -Name "$($RegKeyName)" -ErrorAction silentlycontinue).$RegKeyName
                 if (($existingvalue) -and ($error.count -eq 0)){write-verbose "Found existing regkey $($RegKeyName)" -verbose}
-                else{write-warning "Failed to find existing regkey $($RegKeyName) with error:$($error.Exception.Message)";$error.Clear()}
-
+                else{write-warning "The regkey $($RegKeyName) is missing. Need to Remediate"}
                 if(($ExistingValue -ne $RegKeyValue) -or ($null -eq $ExistingValue)){
-                    $NewRegValue = Set-ItemProperty -Path "$($Key.RegKeyPath)" -Name "$($RegKeyName)" -Value $RegKeyValue -ErrorAction silentlycontinue
-                    $ExistingValue = (Get-ItemProperty -Path $RegKeyPath -Name $RegKeyName -ErrorAction silentlycontinue).$RegKeyName
-                    if(($error.count -eq 0) -and ($ExistingValue -eq $RegKeyValue)){
-                        write-verbose "Remediated the value in $($RegKeyName)" -verbose}
-                    else{write-warning "Failed to remediate the value in $($RegKeyName) with error:$($error.Exception.Message)";return $false}
+                    write-verbose "The value in regkey $($RegKeyName) is not correct. Need to Remediate" -verbose
+                    return $false
                 }
-                else {write-verbose "The value in $($RegKeyName) is correct No need to remediate" -verbose}
+                else {write-verbose "The value in $($RegKeyName) is correct" -verbose}
             }
             else {
-                $NewRegKey= New-Item -Path $RegKeyPath -Force -ErrorAction silentlycontinue
-                if (($NewRegKey) -and ($error.count -eq 0)){write-verbose "Created the missing reg path to $($RegKeyName)" -verbose}
-                else{write-warning "Failed to create the missing reg path to $($RegKeyName) with error:$($error.Exception.Message)";return $false}
-            
-                $NewRegValue = New-ItemProperty -Path $RegKeyPath -Name $RegKeyName -Value $RegKeyValue -Force -ErrorAction silentlycontinue
-                if (($NewRegValue) -and ($error.count -eq 0)){write-verbose "Remediated the value in $($RegKeyName)" -verbose}
-                else{write-warning "Failed to remediate the value in $($RegKeyName) with error:$($error.Exception.Message)";return $false}
+                write-warning "The regpath $($RegKeyPath) is missing. Need to Remediate" -verbose
+                return $false
             }
         }
         return $true
-    }
+        }
     End {}
 }
 function Write-ToEventlog {

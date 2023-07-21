@@ -22,7 +22,7 @@
 #endregion
 
 #region -------------------------------------------------[Modifiable Parameters]-------------------------------------------------
-$RemediationName    = "Reg-Branding"    # Used for Eventlog
+$RemediationName      = "Reg-Branding"    # Used for Eventlog
 $Logpath            = "$($env:TEMP)"    # Path to log transcript
 $RegistryKeys = @(
     @{
@@ -48,14 +48,12 @@ $RegistryKeys = @(
         RegKeyName = "SupportPhone"
         RegKeyValue = "+46 8 214466"
         RegType     = "String"
-    },
-    @{
+    },    @{
         RegKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation"
         RegKeyName = "RegisteredOwner"
         RegKeyValue = "Coligo AB"
         RegType     = "String"
-    },
-    @{
+    },    @{
         RegKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation"
         RegKeyName = "RegisteredOrganization"
         RegKeyValue = "Coligo AB"

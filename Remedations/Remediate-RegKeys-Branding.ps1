@@ -154,7 +154,7 @@ $Transcript = ((Get-Content $LogFile -Raw) -split ([regex]::Escape("************
 
 #region ----------------------------------------------------[Remediation]--------------------------------------------------------
 #Remediated
-Elseif($Remediated){
+if($Remediated){
     $EventText =  "Remediated - Successful remediation `n$($Transcript)";$eventID=20;$EventType="information"
     Write-ToEventlog $EventText $EventSource $eventID $EventType
     Write-output "$($EventText -replace "`n",", " -replace "`r",", ")" #with no line breaks
