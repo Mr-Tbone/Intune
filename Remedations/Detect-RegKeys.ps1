@@ -1,6 +1,6 @@
 <#PSScriptInfo
 .SYNOPSIS
-    Script for Intune Remediation to detect registry keys (Example of Branding in Windows 11)
+    Script for Intune Remediation to detect registry keys (Example)
 
 .DESCRIPTION
     This script will Detect registrykeys and verify the correct values
@@ -13,7 +13,6 @@
 
 .RELESENOTES
     1.0 Initial version
-    1.1 Fixed some errors when using binary values
 #>
 
 #region ------------------------------------------------[Set script requirements]------------------------------------------------
@@ -22,42 +21,50 @@
 #endregion
 
 #region -------------------------------------------------[Modifiable Parameters]-------------------------------------------------
-$RemediationName      = "Reg-Branding"    # Used for Eventlog
+$RemediationName    = "Reg-Win11Context"    # Used for Eventlog
 $Logpath            = "$($env:TEMP)"    # Path to log transcript
 $RegistryKeys = @(
     @{
-        RegKeyPath  = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation"
-        RegKeyName  = "SupportURL"
-        RegKeyValue = "https://www.coligo.se"
-        RegType     = "String"
+        RegKeyPath  = "HKLM:\SOFTWARE\Tbone"
+        RegKeyName  = ""        #If no name is specified, the default regkey is used
+        RegKeyValue = "Tbone"        
+        RegKeyType  = "String"  #Valid values are String, Dword, Qword, Binary, MultiString, ExpandString
     },
     @{
-        RegKeyPath  = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation"
-        RegKeyName  = "Manufacturer"
-        RegKeyValue = "Coligo AB"
-        RegType     = "String"
+        RegKeyPath  = "HKLM:\SOFTWARE\Tbone"
+        RegKeyName  = "Tbone-string"    
+        RegKeyValue = "Tbone-string"
+        RegKeyType  = "string"
     },
     @{
-        RegKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation"
-        RegKeyName = "SupportHours"
-        RegKeyValue = "09:00-16:00"
-        RegType     = "String"
+        RegKeyPath  = "HKLM:\SOFTWARE\Tbone"
+        RegKeyName  = "Tbone-Dword"    
+        RegKeyValue = "7"
+        RegKeyType  = "dword"
     },
     @{
-        RegKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation"
-        RegKeyName = "SupportPhone"
-        RegKeyValue = "+46 8 214466"
-        RegType     = "String"
-    },    @{
-        RegKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation"
-        RegKeyName = "RegisteredOwner"
-        RegKeyValue = "Coligo AB"
-        RegType     = "String"
-    },    @{
-        RegKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation"
-        RegKeyName = "RegisteredOrganization"
-        RegKeyValue = "Coligo AB"
-        RegType     = "String"
+        RegKeyPath  = "HKLM:\SOFTWARE\Tbone"
+        RegKeyName  = "Tbone-Qword"    
+        RegKeyValue = "7"
+        RegKeyType  = "qword"
+    },
+    @{
+        RegKeyPath  = "HKLM:\SOFTWARE\Tbone"
+        RegKeyName  = "Tbone-Binary"    
+        RegKeyValue = "10,10"
+        RegKeyType  = "binary"
+    },
+    @{
+        RegKeyPath  = "HKLM:\SOFTWARE\Tbone"
+        RegKeyName  = "Tbone-Multistring"    
+        RegKeyValue = "Tbone-Multistring"
+        RegKeyType  = "MultiString"
+    },
+    @{
+        RegKeyPath  = "HKLM:\SOFTWARE\Tbone"
+        RegKeyName  = "Tbone-Expandstring"    
+        RegKeyValue = "Tbone-Expandstring"
+        RegKeyType  = "ExpandString"
     }
 )
 #endregion
