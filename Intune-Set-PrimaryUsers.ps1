@@ -91,7 +91,7 @@ if ($AzureAutomation)
     Catch{Write-Error "Failed getting an Access Token to Graph, with error: $_"}
     #Connect to the Microsoft Graph using the AccessToken
     Try{
-	    Connect-mgGraph -AccessToken $accessToken
+	    Connect-mgGraph -AccessToken ($accessToken |ConvertTo-SecureString -AsPlainText -Force)
 	    Write-verbose "Success to connect to Graph"}
     Catch{Write-Error "Failed to connect to Graph, with error: $_"}
     }
