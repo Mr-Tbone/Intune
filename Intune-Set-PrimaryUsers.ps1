@@ -249,7 +249,7 @@ function Set-IntunePrimaryUsers {
             $i++
             #Get current Primary User
             if ($AllPrimaryUsersHash.count -gt 0){$PrimaryuserHash = $AllPrimaryUsersHash[$IntuneDevice.id]
-                $primaryUserJson = ($primaryuserHash.body.value | ConvertTo-Json | ConvertFrom-Json)
+                $primaryUserJson = ($primaryuserHash.body.value | ConvertTo-Json -Depth 9 | ConvertFrom-Json -Depth 9)
                 if ($primaryUserJson -and $primaryUserJson.PSObject.Properties.Name -contains 'userprincipalname') {
                     $primaryuser = $primaryUserJson.userprincipalname}
                 write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to get Primary User $($Primaryuser) for $($IntuneDevice.DeviceName) from batch lookup"}
