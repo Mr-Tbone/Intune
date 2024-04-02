@@ -54,6 +54,7 @@ $ManagedIdentity = "Tbone-IntuneAutomation"
 
 #region ---------------------------------------------------[Static Variables]------------------------------------------------------
     $GraphAppId = "00000003-0000-0000-c000-000000000000" # Don't change this.
+    $AdminPermissions = @("Application.Read.All","AppRoleAssignment.ReadWrite.All")   # To be able to set persmissions on the Managed Identity
 #endregion
 
 #region ---------------------------------------------------[Import Modules and Extensions]-----------------------------------------
@@ -65,7 +66,7 @@ import-module Microsoft.Graph.Applications
 #endregion
 
 #region ---------------------------------------------------[[Script Execution]------------------------------------------------------
-Connect-MgGraph -TenantId $TenantId
+Connect-MgGraph -TenantId $TenantId -Scopes $AdminPermissions
 $IdentityServicePrincipal = Get-MgServicePrincipal -Filter "DisplayName eq '$managedidentity'"
 $GraphServicePrincipal = Get-MgServicePrincipal -Filter "appId eq '$GraphAppId'"
 $AppRoles = $GraphServicePrincipal.AppRoles | Where-Object {$_.Value -in $Permissions -and $_.AllowedMemberTypes -contains "Application"}
@@ -82,4 +83,4 @@ foreach($AppRole in $AppRoles)
       -BodyParameter $AppRoleAssignment `
       -Verbose
   }
-#endregion
+disconnect-mggraph
