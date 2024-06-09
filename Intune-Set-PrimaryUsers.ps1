@@ -314,7 +314,7 @@ $StartTime = Get-Date
 $MgGraphAccessToken = ConnectTo-MgGraph -RequiredScopes $RequiredScopes
 
 #Get Intune Devices
-try{$IntuneDevices =@(Get-MgDeviceManagementManagedDevice -filter "operatingSystem eq 'Windows'and LastSyncDateTime gt $($DeviceStartTime.ToString("yyyy-MM-ddTHH:mm:ssZ"))" -all -Property "AzureAdDeviceId,DeviceName,Id")
+try{$IntuneDevices = @(Get-MgDeviceManagementManagedDevice -filter "operatingSystem eq 'Windows'and LastSyncDateTime gt $($DeviceStartTime.ToString("yyyy-MM-ddTHH:mm:ssZ"))" -all -Property "AzureAdDeviceId,DeviceName,Id")
     write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to get $($IntuneDevices.count) Devices with selected properties for devices synced last $($DeviceTimeSpan) days"}
 catch{write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to get Devices with error: $_"}
 
