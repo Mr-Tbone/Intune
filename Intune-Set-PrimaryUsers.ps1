@@ -249,7 +249,7 @@ function Set-IntunePrimaryUsers {
             $i++
             #Get current Primary User
             if ($AllPrimaryUsersHash.count -gt 0){$PrimaryuserHash = $AllPrimaryUsersHash[$IntuneDevice.id]
-                $primaryUserJson = ($primaryuserHash.body.value | ConvertTo-Json -Depth 9 | ConvertFrom-Json -Depth 9)
+                $primaryUserJson = ($primaryuserHash.body.value | ConvertTo-Json -Depth 9 | ConvertFrom-Json)
                 if ($primaryUserJson -and $primaryUserJson.PSObject.Properties.Name -contains 'userprincipalname') {
                     $primaryuser = $primaryUserJson.userprincipalname}
                 write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to get Primary User $($Primaryuser) for $($IntuneDevice.DeviceName) from batch lookup"}
@@ -314,7 +314,7 @@ $StartTime = Get-Date
 $MgGraphAccessToken = ConnectTo-MgGraph -RequiredScopes $RequiredScopes
 
 #Get Intune Devices
-try{$IntuneDevices = Get-MgDeviceManagementManagedDevice -filter "operatingSystem eq 'Windows'and LastSyncDateTime gt $($DeviceStartTime.ToString("yyyy-MM-ddTHH:mm:ssZ"))" -all -Property "AzureAdDeviceId,DeviceName,Id"
+try{$IntuneDevices =@(Get-MgDeviceManagementManagedDevice -filter "operatingSystem eq 'Windows'and LastSyncDateTime gt $($DeviceStartTime.ToString("yyyy-MM-ddTHH:mm:ssZ"))" -all -Property "AzureAdDeviceId,DeviceName,Id")
     write-verbose "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Success to get $($IntuneDevices.count) Devices with selected properties for devices synced last $($DeviceTimeSpan) days"}
 catch{write-Error "$(Get-Date -Format 'yyyy-MM-dd'),$(Get-Date -format 'HH:mm:ss'),Failed to get Devices with error: $_"}
 
