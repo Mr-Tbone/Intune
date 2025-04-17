@@ -158,7 +158,7 @@ finally { # Restore original logging level
 
 #region ---------------------------------------------------[Static Variables]------------------------------------------------------
 if ($Testmode){$WhatIfPreference = 1}           # Manually eneble whatif mode with a parameter for testing
-
+[string]$scriptAction = "Intune Primary User"   # Action name for logging
 # Reporting variable with values and types for reporting
 $script:ReportProgress = @{
     Total   = [int]0
@@ -1276,10 +1276,10 @@ catch {
 finally {
 # Generate report if requested
     if ($ReturnReport -and $DetailedReport -and $script:ReportResults.Count -gt 0) {
-        Invoke-ScriptReport -DetailedReport $true -ScriptAction "$($MyInvocation.MyCommand.Name)" -ScriptStartTime $Script:StartTime -ScriptEndTime $script:EndTime
+        Invoke-ScriptReport -DetailedReport $true -ScriptAction $scriptAction -ScriptStartTime $Script:StartTime -ScriptEndTime $script:EndTime
         Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name) Generated detailed report"
     } elseif ($ReturnReport -and $script:ReportResults.Count -gt 0) {
-        Invoke-ScriptReport -DetailedReport $false -ScriptAction "$($MyInvocation.MyCommand.Name)" -ScriptStartTime $Script:StartTime -ScriptEndTime $script:EndTime
+        Invoke-ScriptReport -DetailedReport $false -ScriptAction $scriptAction -ScriptStartTime $Script:StartTime -ScriptEndTime $script:EndTime
         Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name) Generated summary report"
     }
     # Disconnect from Graph
