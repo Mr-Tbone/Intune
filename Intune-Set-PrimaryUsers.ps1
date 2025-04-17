@@ -69,10 +69,10 @@ param(
     [string[]]$IncludedNames        = @(),
     
     [Parameter(Mandatory = $false,          HelpMessage = "Filter to exclude devicenames that starts with ('Tbone', 'Desktop'). Default is blank")]
-    [string[]]$ExcludedNames        = @('hufvudnt'),
+    [string[]]$ExcludedNames        = @('TboneSRV'),
 
     [Parameter(Mandatory = $false,          HelpMessage = "Filter to exclude enrollment accounts ('wds@tbone.se','ris@tbone.se'). Default is blank")]
-    [string[]]$EnrollmentAccounts   = @("temp@hufvudstaden.se","wds@hufvudstaden.se"),
+    [string[]]$EnrollmentAccounts   = @("wds1@tbone.e","wds2@tbone.se"),
 
     [Parameter(Mandatory = $false,          HelpMessage = "Number of days to look back for sign-in logs. Default is 30 days")]
     [ValidateRange(1,90)]
@@ -95,7 +95,7 @@ param(
     [string]$ReportPath             = ("c:\Reports"),
 
     [Parameter(Mandatory = $false,          HelpMessage = "Enable verbose logging. Default is false")]
-    [bool]$VerboseLogging           = $True,
+    [bool]$VerboseLogging           = $false,
 
     [Parameter(Mandatory = $false,          HelpMessage = "Number of devices to process in each batch. Default is 20")]
     [ValidateRange(1,20)]
