@@ -49,134 +49,141 @@
     3.0.2407.2 - Added a verification of required permissions
     4.0.2503.1 - Added new functions and new structure for the script
     5.0.2504.1 - Changed all requests to use invoke-mggraphrequets
+    5.0.2504.2 - Bug fixing and error and throttling handling
 #>
 
-#region ---------------------------------------------------[Set script requirements]-----------------------------------------------
-#
+#region ---------------------------------------------------[Set Script Requirements]-----------------------------------------------
 #Requires -Modules Microsoft.Graph.Authentication
-#
+#Requires -Version 5.1
 #endregion
 
-#region ---------------------------------------------------[Script Parameters]-----------------------------------------------
-#endregion
-
-#region ---------------------------------------------------[Modifiable Parameters and defaults]------------------------------------
+#region ---------------------------------------------------[Modifiable Parameters and Defaults]------------------------------------
 # Customizations
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Device operating systems to process ('All', 'Windows', 'Android', 'iOS', 'macOS')")]
+    [Parameter(Mandatory = $false,          HelpMessage = "Device operatingsystems to process ('All', 'Windows', 'Android', 'iOS', 'macOS'). Default is Windows")]
     [ValidateSet('All', 'Windows', 'Android', 'iOS', 'macOS')]
-    [string[]]$OperatingSystems = @('Windows'),    # Default to Windows only
+    [string[]]$OperatingSystems     = @('Windows'),
+    
+    [Parameter(Mandatory = $false,          HelpMessage = "Filter to only include devicenames that starts with ('Tbone', 'Desktop'). Default is blank")]
+    [string[]]$IncludedNames        = @(),
+    
+    [Parameter(Mandatory = $false,          HelpMessage = "Filter to exclude devicenames that starts with ('Tbone', 'Desktop'). Default is blank")]
+    [string[]]$ExcludedNames        = @('hufvudnt'),
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Array of enrollment accounts to exclude from primary user assignment")]
-    [string[]]$EnrollmentAccounts = @(),   # Empty array means no exclusions
+    [Parameter(Mandatory = $false,          HelpMessage = "Filter to exclude enrollment accounts ('wds@tbone.se','ris@tbone.se'). Default is blank")]
+    [string[]]$EnrollmentAccounts   = @("temp@hufvudstaden.se","wds@hufvudstaden.se"),
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Number of days to look back for sign-in logs")]
+    [Parameter(Mandatory = $false,          HelpMessage = "Number of days to look back for sign-in logs. Default is 30 days")]
+    [ValidateRange(1,90)]
+    [int]$SignInsTimeSpan           = 30,
+
+    [Parameter(Mandatory = $false,          HelpMessage = "Number of days to look back for active devices. Default is 30 days")]
     [ValidateRange(1,365)]
-    [int]$SignInsTimeSpan = 30,    # Default 30 days
+    [int]$DeviceTimeSpan            = 30,
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Number of days to look back for active devices")]
-    [ValidateRange(1,365)]
-    [int]$DeviceTimeSpan = 30,     # Default 30 days
+    [Parameter(Mandatory = $false,          HelpMessage = "Return statistics report with how many changed objects. Default is true")]
+    [bool]$ReturnReport             = $true,
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Enable batch processing mode")]
-    [bool]$RunBatchMode = $true,    # Default to batch mode for better performance
+    [Parameter(Mandatory = $false,          HelpMessage = "Include detailed device status in report. Default is true")]
+    [bool]$DetailedReport           = $true,
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Return execution report")]
-    [bool]$ReturnReport = $true,    # Default to returning report
+    [Parameter(Mandatory = $false,          HelpMessage = "Save report to disk. Default is false")]
+    [bool]$ReportDisk               = $false,    
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Include detailed device status in report")]
-    [bool]$DetailedReport = $true,  # Default to detailed reporting
+    [Parameter(Mandatory = $false,          HelpMessage = "Path where to save the report. Default is c:\Reports")]
+    [string]$ReportPath             = ("c:\Reports"),
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Save report to disk")]
-    [bool]$ReportDisk = $true,     # Default to saving report
+    [Parameter(Mandatory = $false,          HelpMessage = "Enable verbose logging. Default is false")]
+    [bool]$VerboseLogging           = $True,
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Path where to save the report")]
-    [string]$ReportPath = ("c:\Reports"), # Default report path
-
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Enable verbose logging")]
-    [bool]$VerboseLogging = $true,  # Default to verbose logging
-
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Number of devices to process in each batch")]
+    [Parameter(Mandatory = $false,          HelpMessage = "Number of devices to process in each batch. Default is 20")]
     [ValidateRange(1,20)]
-    [int]$BatchSize = 20,          # Default batch size
+    [int]$BatchSize                 = 20,
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Wait time in milliseconds between batches")]
+    [Parameter(Mandatory = $false,          HelpMessage = "Wait time in milliseconds between batches to avoid throttling. Default is 1000")]
     [ValidateRange(100,5000)]
-    [int]$WaitTime = 1000,         # Default wait time
+    [int]$WaitTime                  = 1000,
 
-    [Parameter(Mandatory = $false,
-        HelpMessage = "Maximum number of retry attempts for failed requests")]
+    [Parameter(Mandatory = $false,          HelpMessage = "Maximum number of retry attempts for failed requests. Default is 3")]
     [ValidateRange(1,10)]
-    [int]$MaxRetry = 3            # Default retry attempts
+    [int]$MaxRetry                  = 3,
 
+    [Parameter(Mandatory = $false,          HelpMessage = "Testmode, same as -WhatIf. Default is true")]
+        [bool]$Testmode             = $false
     )
 #endregion
 
 #region ---------------------------------------------------[Set global script settings]--------------------------------------------
-Set-StrictMode -Version Latest
-$script:GetTimestamp    = { ([DateTime]::Now).ToString('yyyy-MM-dd HH:mm:ss') }
-if ($VerboseLogging) {$VerbosePreference = 'Continue'}
-else {$VerbosePreference = 'SilentlyContinue'}
 # Exit if running as a managed identity in PowerShell 7.2 due to bugs connecting to MgGraph https://github.com/microsoftgraph/msgraph-sdk-powershell/issues/3151
 if ($env:IDENTITY_ENDPOINT -and $env:IDENTITY_HEADER -and $PSVersionTable.PSVersion -eq [version]"7.2.0") {
-    Write-Error "$($script:GetTimestamp.Invoke()),Error, This script cannot run as a managed identity in PowerShell 7.2. Please use a different version of PowerShell."
+    Write-Error "Error, This script cannot run as a managed identity in PowerShell 7.2. Please use a different version of PowerShell."
     exit 1}
-# Add garbage collection settings to preserve memory
-[System.Runtime.GCSettings]::LargeObjectHeapCompactionMode = 'CompactOnce'
-[System.GC]::WaitForPendingFinalizers()
+# Save original preference states
+$OriginalErrorActionPreference = $ErrorActionPreference
+$OriginalVerbosePreference = $VerbosePreference
+$OriginalWhatIfPreference = $WhatIfPreference
+# set strict mode to latest version
+Set-StrictMode -Version Latest
+# Set verbose- and should-preference based on parameters
+if ($VerboseLogging)    {$VerbosePreference = 'Continue'}                   # Set verbose logging based on the parameter $VerbosePreference
+else                    {$VerbosePreference = 'SilentlyContinue'}
+if($Testmode)           {$WhatIfPreference = 1}                             # Manually enable whatif mode with parameter $Testmode for testing
+# Declare a timestamp format for logging
+$script:GetTimestamp =  {([DateTime]::Now).ToString('yyyy-MM-dd HH:mm:ss')} # Set the timestamp format for logging
 #endregion
 
 #region ---------------------------------------------------[Import Modules and Extensions]-----------------------------------------
-# Disable verbose logging when loding required modules
-$currentVerbosePreference = $VerbosePreference
-$VerbosePreference = 'SilentlyContinue'
-try {Import-Module Microsoft.Graph.Authentication}
-catch {Write-Error "$($script:GetTimestamp.Invoke()),Error, Failed to import required modules: $_"
-    throw}
-# Restore original logging level
-finally {$VerbosePreference = $currentVerbosePreference}
+$requiredModules = @(
+    'Microsoft.Graph.Authentication'
+)
+# Disable verbose logging when loading required modules to avoid cluttering the output
+$currentVerbosePreference = $VerbosePreference; $VerbosePreference = 'SilentlyContinue'
+try {
+    foreach ($moduleName in $requiredModules) {
+        try {
+            Import-Module $moduleName
+            Write-Verbose "$($script:GetTimestamp.Invoke()),Info, Successfully imported module '$moduleName'"
+        }
+        catch {
+            Write-Error "$($script:GetTimestamp.Invoke()),Error, Failed to import required module '$moduleName': $_"
+            throw # Stop script if any essential module fails
+        }
+    }
+}
+finally { # Restore original logging level
+    $VerbosePreference = $currentVerbosePreference
+}
 #endregion
 
 #region ---------------------------------------------------[Static Variables]------------------------------------------------------
-[String]$ScriptAction   = "Set Primary User" # Report Title for the action performed by the script
+if ($Testmode){$WhatIfPreference = 1}           # Manually eneble whatif mode with a parameter for testing
 
 # Reporting variable with values and types for reporting
-$script:Progress = @{
+$script:ReportProgress = @{
     Total   = [int]0
-    Current = [int]0
     Success = [int]0
+    Whatif  = [int]0
     Failed  = [int]0
     Skipped = [int]0
 }
-
 # Reporting variable for results
-$script:ProcessResults = [System.Collections.Queue]::new()
+$script:ReportResults = [System.Collections.Queue]::new()
 
 # Required Graph API scopes
 [System.Collections.ArrayList]$RequiredScopes      = "DeviceManagementManagedDevices.ReadWrite.All", "AuditLog.Read.All", "User.Read.All"
-
-[datetime]$SignInsStartTime     = (Get-Date).AddDays(-$SigninsTimeSpan )
-$SignInLogs                     = @() # Array for sign-in logs
-$devices                        = @() # Array for Intune devices
-$AllPrimaryUsersHash            = @{} # Hash table for primary users
-$GraphProperties                = $null # Graph API properties
-$GraphFilters                   = $null # Graph API filters
-$GraphBody                      = $null # Graph API body
-$MgGraphAccessToken             = $null # Microsoft Graph access token
-$script:EndTime                 = $null # Script end time
+# Declare variables for the script 
+[datetime]$SignInsStartTime                 = (Get-Date).AddDays(-$SigninsTimeSpan )
+[System.Collections.ArrayList]$AllSignInLogs= [System.Collections.ArrayList]::new() # Array for sign-in logs
+[System.Collections.ArrayList]$AllDevices   = [System.Collections.ArrayList]::new() # Array for Intune devices
+[hashtable]$AllPrimaryUsersHash             = @{} # Hash table for primary users
+[string[]]$GraphProperties                  = $null # Graph API properties
+[string[]]$GraphFilters                     = @() # Array for Graph API filter components
+[string]$GraphFilterString                  = $null # Graph API filters
+[string]$GraphBody                          = $null # Graph API body
+$MgGraphAccessToken                         = $null # Microsoft Graph access token or context
+[datetime]$Script:StartTime                 = ([DateTime]::Now) # Script start time
+[datetime]$script:EndTime                   = ([DateTime]::Now) # Script end time
 
 # Set the enrollment accounts filter for the Graph API request
 $EnrollmentAccountsFilter = if ($EnrollmentAccounts) { $EnrollmentAccounts -join '|' } else { $null }
@@ -316,23 +323,9 @@ function Invoke-ConnectMgGraph {
     }
 
     End {
-        # Cleanup memory after executing a function
-        try {
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Memory usage before cleanup: $MemoryUsage MB"
-            # Get all parameters of the function
-            $params = $PSBoundParameters.Keys
-            # Remove each parameter from the script scope
-            foreach ($param in $params) {
-                Remove-Variable -Name $param -Scope Local -ErrorAction SilentlyContinue |out-null
-            }
-            [System.GC]::Collect()
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Memory usage after cleanup: $MemoryUsage MB"
-        }
-        catch {
-            Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Failed to cleanup memory garbage: $_"
-        }
+        # End function and report memory usage 
+        $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Function finished. Memory usage: $MemoryUsage MB"
     }
 }
 function invoke-mgGraphRequestBatch {
@@ -522,7 +515,9 @@ function invoke-mgGraphRequestBatch {
                                             Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Access denied to object $($response.id) - Status: $($response.status)"
                                         }
                                         404 { 
-                                            Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Object $($response.id) not found - Status: $($response.status)"
+                                            Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Resource not found (404). Error: $ErrorMessage"
+                                            # Re-throw the original exception to signal failure to the caller
+                                            throw $_
                                         }
                                         429 {
                                             [void]$RetryObjects.Add($response)
@@ -580,7 +575,7 @@ function invoke-mgGraphRequestBatch {
                     if ($RetryObjects.Count -gt 0 -and $MaxRetry -gt 0) {
                         $Retrycount++
                         $MaxRetry--
-                        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Sarting retry $Retrycount with $($RetryObjects.Count) objects"
+                        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Starting retry $Retrycount with $($RetryObjects.Count) objects"
                         # The objects to retry are the ones that had errors
                         $Objects = $RetryObjects | ForEach-Object {$Objects | Where-Object {$_.id -eq $_.id}}
                     }
@@ -599,29 +594,15 @@ function invoke-mgGraphRequestBatch {
             return $CollectedObjects   
         }
         catch {
-            Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Failed in main process block with error: $_"
+            Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Function failed in main process block with error: $_"
             throw
         }
     }
     
     End {
-        # Cleanup memory after executing a function
-        try {
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Memory usage before cleanup: $MemoryUsage MB"
-            # Get all parameters of the function
-            $params = $PSBoundParameters.Keys
-            # Remove each parameter from the script scope
-            foreach ($param in $params) {
-                Remove-Variable -Name $param -Scope Local -ErrorAction SilentlyContinue
-            }
-            [System.GC]::Collect()
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Memory usage after cleanup: $MemoryUsage MB"
-        }
-        catch {
-            Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Failed to cleanup memory garbage: $_"
-        }
+        # End function and report memory usage 
+        $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Function finished. Memory usage: $MemoryUsage MB"
     }
 }
 function Invoke-MgGraphRequestSingle {
@@ -707,27 +688,34 @@ function Invoke-MgGraphRequestSingle {
                 Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Making request to: $uri"
                 $i = 1
                 do {
+                    $response = $null
                     Write-Verbose "$(&$script:GetTimestamp),Info,$($MyInvocation.MyCommand.Name),Requesting page $i with $PageSize items"
+                    #Set default parameters for Invoke-MgGraphRequest
                     $params = @{
                         Method      = $Method
                         Uri         = $uri
                         ErrorAction = 'Stop'
                         OutputType  = 'PSObject'
                     }
-                    
+                    #add additional parameters based on method
                     if ($Method -in 'POST', 'PATCH') {
                         $params['Body'] = $Body
                         $params['Headers'] = @{
                             'Content-Type' = 'application/json'
                         }
+                        write-verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Request body: $($Body | ConvertTo-Json -Depth 10)"
                     }
+                    #send request to Graph API
                     try {
                         $response = Invoke-MgGraphRequest @params
                         Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Request successful"
                     }
-                    catch {Write-Verbose "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Request failed with error: $_"}
+                    catch {Write-Verbose "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Request failed with error: $_"
+                        #return $response
+                        throw
+                    }
                     if ($Method -eq 'POST') {
-                    return
+                        return $response
                     }
                     if ($response.value) {
                         [void]$PsobjectResults.AddRange($response.value)
@@ -755,24 +743,62 @@ function Invoke-MgGraphRequestSingle {
                 $ErrorMessage = $_.Exception.Message
                 Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Request failed (Retry attempt $($RetryCount + 1)/$MaxRetry): $ErrorMessage"
 
-                # Handle throttling or retry logic
-                if ($_.Exception.Response.StatusCode -eq 429) {
-                    $RetryAfter = ($_.Exception.Response.Headers | Where-Object {$_.Name -eq "Retry-After"}).Value
-                    if ($RetryAfter) {
-                        Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Throttling detected. Waiting $($RetryAfter * 1000) milliseconds before retrying."
-                        Start-Sleep -Milliseconds ($RetryAfter * 1000) # Convert seconds to milliseconds
-                    } else {
-                        $Delay = [math]::Min(($WaitTime * ([math]::Pow(2, $RetryCount))), 60000) # Exponential backoff, max 60,000 milliseconds (60 seconds)
-                        Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Throttling detected. No Retry-After header found. Waiting $($Delay) milliseconds before retrying."
-                        Start-Sleep -Milliseconds $Delay
+                # Check if the exception has response details (it should for HTTP errors)
+                if ($_.Exception.Response) {
+                    $StatusCode = $_.Exception.Response.StatusCode
+
+                    # Use switch to handle specific status codes
+                    switch ($StatusCode) {
+                        429 { # Throttling
+                            $RetryAfter = ($_.Exception.Response.Headers | Where-Object {$_.Name -eq "Retry-After"}).Value
+                            if ($RetryAfter) {
+                                Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Throttling detected (429). Waiting $($RetryAfter * 1000) milliseconds before retrying."
+                                Start-Sleep -Milliseconds ($RetryAfter * 1000) # Convert seconds to milliseconds
+                            } else {
+                                $Delay = [math]::Min(($WaitTime * ([math]::Pow(2, $RetryCount))), 60000) # Exponential backoff, max 60 seconds
+                                Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Throttling detected (429). No Retry-After header found. Waiting $($Delay) milliseconds before retrying."
+                                Start-Sleep -Milliseconds $Delay
+                            }
+                            # Break not needed, will fall through to retry logic below
+                        }
+                        404 { # Not Found
+                            Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Resource not found (404). Error: $ErrorMessage"
+                            # Re-throw the original exception to signal failure to the caller immediately
+                            throw $_
+                        }
+                        400 { # Bad Request
+                             Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Bad request (400). Error: $ErrorMessage"
+                             # Re-throw to fail immediately (assuming Bad Request is not retryable)
+                             throw $_
+                        }
+                         403 { # Forbidden / Access Denied
+                             Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Access denied (403). Error: $ErrorMessage"
+                             # Re-throw to fail immediately
+                             throw $_
+                        }
+                        default { # Other HTTP errors - Use generic retry
+                            $Delay = [math]::Min(($WaitTime * ([math]::Pow(2, $RetryCount))), 60000) # Exponential backoff, max 60 seconds
+                            Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),HTTP error $($StatusCode). Waiting $($Delay) milliseconds before retrying."
+                            Start-Sleep -Milliseconds $Delay
+                            # Break not needed, will fall through to retry logic below
+                        }
                     }
                 } else {
-                    $Delay = [math]::Min(($WaitTime * ([math]::Pow(2, $RetryCount))), 60000) # Exponential backoff, max 60,000 milliseconds (60 seconds)
-                    Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Non-throttling error. Waiting $($Delay) milliseconds before retrying."
+                    # Non-HTTP errors (e.g., network issues, DNS resolution) - Use generic retry
+                    $Delay = [math]::Min(($WaitTime * ([math]::Pow(2, $RetryCount))), 60000) # Exponential backoff, max 60 seconds
+                    Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Non-HTTP error. Waiting $($Delay) milliseconds before retrying. Error: $ErrorMessage"
                     Start-Sleep -Milliseconds $Delay
+                    # Fall through to retry logic below
                 }
 
+                # Increment retry count and check if max retries exceeded ONLY if not already thrown
                 $RetryCount++
+                if ($RetryCount -gt $MaxRetry) {
+                     Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Request failed after $($MaxRetry) retries. Aborting."
+                     # Throw a specific message or re-throw the last caught error
+                     throw "Request failed after $($MaxRetry) retries. Last error: $ErrorMessage"
+                }
+                # If retries not exceeded and error was potentially retryable (e.g., 429, other HTTP, non-HTTP), the loop will continue
             }
         } while ($RetryCount -le $MaxRetry)
 
@@ -781,46 +807,28 @@ function Invoke-MgGraphRequestSingle {
     }
 
     End {
-        # Cleanup memory after executing a function
-        try {
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Memory usage before cleanup: $MemoryUsage MB"
-            # Get all parameters of the function
-            $params = $PSBoundParameters.Keys
-            # Remove each parameter from the script scope
-            foreach ($param in $params) {
-                Remove-Variable -Name $param -Scope Local -ErrorAction SilentlyContinue
-            }
-            [System.GC]::Collect()
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Memory usage after cleanup: $MemoryUsage MB"
-        }
-        catch {
-            Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Failed to cleanup memory garbage: $_"
-        }
+        # End function and report memory usage 
+        $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Function finished. Memory usage: $MemoryUsage MB"
     }
 }
 function Invoke-ScriptReport {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $false, HelpMessage = "Title of the report")]
+        [Parameter(Mandatory = $false,          HelpMessage = "Action performed by the script")]
         [ValidateNotNullOrEmpty()]
-        [string]$ReportTitle = "Script Report",
+        [string]$ScriptAction           = "Generic Report",
 
-        [Parameter(Mandatory = $false, HelpMessage = "Action performed by the script")]
+        [Parameter(Mandatory = $false,          HelpMessage = "Include detailed report")]
+        [bool]$DetailedReport           = $script:DetailedReport,
+
+        [Parameter(Mandatory = $false,          HelpMessage = "Script Start Time")]
         [ValidateNotNullOrEmpty()]
-        [string]$ScriptAction = "Primary User Assignment",
+        [datetime]$ScriptStartTime      = [DateTime]::Now,
 
-        [Parameter(Mandatory = $false, HelpMessage = "Include detailed report")]
-        [bool]$DetailedReport = $script:DetailedReport,
-
-        [Parameter(Mandatory = $false, HelpMessage = "Script Start Time")]
+        [Parameter(Mandatory = $false,          HelpMessage = "Script End Time")]
         [ValidateNotNullOrEmpty()]
-        [datetime]$ScriptStartTime = [DateTime]::Now,
-
-        [Parameter(Mandatory = $false, HelpMessage = "Script End Time")]
-        [ValidateNotNullOrEmpty()]
-        [datetime]$ScriptEndTime = [DateTime]::Now
+        [datetime]$ScriptEndTime        = [DateTime]::Now
     )
 
     Begin {
@@ -846,42 +854,63 @@ function Invoke-ScriptReport {
                     @{
                         StartTime         = $ScriptStartTime
                         Duration          = "{0:hh\:mm\:ss}" -f ($ScriptEndTime - $ScriptStartTime)
-                        TotalObjects      = $script:Progress.Total
-                        ObjectsProcessed  = $script:Progress.Current
-                        ObjectsChanged    = $script:Progress.Success
-                        ObjectsSkipped    = $script:Progress.Skipped
-                        ObjectsFailed     = $script:Progress.Failed
+                        TotalObjects      = $script:ReportProgress.Total
+                        ObjectsChanged    = $script:ReportProgress.Success
+                        WouldChange       = $script:ReportProgress.Whatif
+                        ObjectsSkipped    = $script:ReportProgress.Skipped
+                        ObjectsFailed     = $script:ReportProgress.Failed
                     }
                 )
                 Details = @()
             }
 
+            # Generate detailed report if requested
+            if ($DetailedReport) {
+                Write-Output "`nScript Report - $ScriptAction - Details"
+                Write-Output "================================================================================================================================="
+                Write-Output "Object`t`tOldValue`t`t`tNewValue`t`t`tStatus"
+                Write-Output "----------`t`t--------`t`t`t--------`t`t`t------"
+
+                # Use deviceResults queue for detailed status
+                $ErrorActionPreference = "Silentlycontinue"
+                $script:ReportResults = $script:ReportResults | Sort-Object -Property Status, Object
+                foreach ($deviceResult in $script:ReportResults) {
+                    if($deviceResult.Status -like 'Success:*') {
+                        Write-Output "$($deviceResult.Object)`t$($deviceResult.OldValue)`t$($deviceResult.NewValue)`t$($deviceResult.Status)" 
+                    }
+                    elseif ($deviceResult.Status -like 'Skipped: Correct*') {
+                        Write-Output "$($deviceResult.Object)`t$($deviceResult.OldValue)`t$($deviceResult.NewValue)`t$($deviceResult.Status)" 
+                    }
+                    elseif ($deviceResult.Status -like 'Skipped:*') {
+                        Write-Output "$($deviceResult.Object)`t$($deviceResult.OldValue)`t$($deviceResult.NewValue)`t$($deviceResult.Status)" 
+                    }
+                    elseif ($deviceResult.Status -like 'Failed:*') {
+                        Write-Output "$($deviceResult.Object)`t$($deviceResult.OldValue)`t$($deviceResult.NewValue)`t$($deviceResult.Status)"
+                    }
+                    elseif ($deviceResult.Status -like 'Whatif:*') {
+                        Write-Output "$($deviceResult.Object)`t$($deviceResult.OldValue)`t$($deviceResult.NewValue)`t$($deviceResult.Status)" 
+                    }
+                    else {
+                    Write-Output "$($deviceResult.Object)`t$($deviceResult.OldValue)`t$($deviceResult.NewValue)`t$($deviceResult.Status)" 
+                    }
+                }
+                Write-Output ""
+            $ErrorActionPreference = 'Stop'
+            }
+
             # Display simple report
-            Write-Output "`n$ReportTitle - $ScriptAction"
+            Write-Output "`nScript Report - $ScriptAction"
             Write-Output "====================="
             Write-Output "Start Time: $($reportData.Summary.StartTime)"
             Write-Output "Duration: $($reportData.Summary.Duration)"
             Write-Output "`nSummary Statistics:"
             Write-Output "-----------------"
             Write-Output "Total Objects Found:`t`t$($reportData.Summary.TotalObjects)"
-            Write-Output "Processed:`t`t`t$($reportData.Summary.ObjectsProcessed)"
+            Write-Output "Would Change:`t`t`t$($reportData.Summary.WouldChange)"
             Write-Output "Changed:`t`t`t$($reportData.Summary.ObjectsChanged)"
             Write-Output "Skipped Total:`t`t`t$($reportData.Summary.ObjectsSkipped)"
             Write-Output "Failed:`t`t`t`t$($reportData.Summary.ObjectsFailed)"
 
-            # Generate detailed report if requested
-            if ($DetailedReport) {
-                Write-Output "`nDetailed Device Status:"
-                Write-Output "---------------------"
-                Write-Output "Object`t`tValue`t`tStatus"
-                Write-Output "----------`t`t--------`t`t------"
-
-                # Use deviceResults queue for detailed status
-                foreach ($deviceResult in $script:ProcessResults) {
-                    Write-Output "$($deviceResult.Object)`t`t$($deviceResult.Value)`t`t$($deviceResult.Status)"
-                }
-                Write-Output ""
-            }
 
             # Save report to disk if requested
             if ($script:ReportDisk) {
@@ -903,17 +932,9 @@ function Invoke-ScriptReport {
     }
 
     End {
-        # Cleanup memory after executing the function
-        try {
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Memory usage before cleanup: $MemoryUsage MB"
-            [System.GC]::Collect()
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Memory usage after cleanup: $MemoryUsage MB"
-        }
-        catch {
-            Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Failed to cleanup memory: $_"
-        }
+        # End function and report memory usage 
+        $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Function finished. Memory usage: $MemoryUsage MB"
     }
 }
 function Convert-PSObjectArrayToHashTable {
@@ -928,7 +949,8 @@ function Convert-PSObjectArrayToHashTable {
 
     Begin {
         # Initialize the hashtable
-        $HashTable = @{}
+        $HashTable = @{
+        }
     }
 
     Process {
@@ -949,10 +971,12 @@ function Convert-PSObjectArrayToHashTable {
             }
         }
     }
-
     End {
         # Return the constructed hashtable
         return $HashTable
+        # End function and report memory usage 
+        $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Function finished. Memory usage: $MemoryUsage MB"
     }
 }
 #endregion
@@ -972,23 +996,51 @@ try {
     try{
         #Prepare filter and properties to get devices
         $GraphProperties = 'id,deviceName,operatingSystem,roleScopeTagIds,AzureAdDeviceId'
-        if ($OperatingSystems -contains 'All') {$GraphFilters = $null} 
+        $OperatingSystems = @($OperatingSystems)    # Ensure object type array if not already
+        $IncludedNames = @($IncludedNames)          # Ensure object type array if not already
+
+        # Add operating system filters
+        if ($OperatingSystems -contains 'All') {}   # No OS filter
         else {
-            $GraphFilters = ($OperatingSystems | ForEach-Object { 
-            "operatingSystem eq '$_'" 
-            }) -join ' or '
+            $OperatingSystemFilters = @($OperatingSystems | ForEach-Object { "operatingSystem eq '$_'" })
+            if ($OperatingSystemFilters.Count -gt 0) {
+                $GraphFilters += "($($OperatingSystemFilters -join ' or '))"
             }
-        #Get devices with invoke-mggraphrequest
-        $Devices = Invoke-MgGraphRequestSingle `
+        }
+        # Add device name inclusion filters
+        if (!$IncludedNames) {}   # No Include name filter
+        else{
+            $IncludedNameFilters = @()
+            foreach ($name in $IncludedNames) {
+                $IncludedNameFilters += "startswith(deviceName, '$name')"
+            }
+            if ($IncludedNameFilters.Count -gt 0) {
+                $GraphFilters += "($($IncludedNameFilters -join ' or '))"
+            }
+        }
+        # Combine filters with 'and'
+        if ($GraphFilters.Count -gt 0) {
+            $GraphFilterString = $GraphFilters -join ' and '
+        }
+        else {$GraphFilterString = $null} # No filters
+
+        # Get devices with invoke-mggraphrequest
+        $AllDevices = Invoke-MgGraphRequestSingle `
             -RunProfile 'beta' `
             -Method 'GET' `
             -Object 'deviceManagement/managedDevices' `
             -Properties $GraphProperties `
-            -Filters $GraphFilters
+            -Filters $GraphFilterString
+
         #Verify if devices were found   
-        if ($Devices -and $Devices.Count -gt 0) {
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Retrieved total of $($Devices.Count) devices"
-            $script:Progress.Total = $Devices.Count}
+        if ($AllDevices -and $AllDevices.Count -gt 0) {
+            # Filter out devices if excluded devicenames are provided
+            if ($ExcludedNames) {
+                $AllDevices = $AllDevices | Where-Object { $_.deviceName -notmatch $ExcludedNames }
+            }
+            $AllDevices = $AllDevices | sort-object deviceName
+            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Retrieved total of $($AllDevices.Count) devices"
+            $script:ReportProgress.Total = $AllDevices.Count}
         else {
             Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),No devices found for the specified criteria"
             throw "No devices found for the specified criteria"
@@ -1003,17 +1055,17 @@ try {
     try {
         #Prepare filter and properties to get sign-in logs
         $GraphProperties = 'deviceDetail,userPrincipalName,userId'
-        $GraphFilters = "appDisplayName eq 'Windows Sign In' and status/errorCode eq 0 and isInteractive eq true and clientAppUsed eq 'Mobile Apps and Desktop clients' and createdDateTime gt $($SignInsStartTime.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+        $GraphFilterString = "appDisplayName eq 'Windows Sign In' and status/errorCode eq 0 and isInteractive eq true and clientAppUsed eq 'Mobile Apps and Desktop clients' and createdDateTime gt $($SignInsStartTime.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
         #Get sign-in logs with invoke-mggraphrequest
-        $SignInLogs = Invoke-MgGraphRequestSingle `
+        $AllSignInLogs = Invoke-MgGraphRequestSingle `
             -RunProfile 'beta' `
             -Method 'GET' `
             -Object 'auditLogs/signIns' `
             -Properties $GraphProperties `
-            -Filters $GraphFilters 
+            -Filters $GraphFilterString 
         #Verify if sign-in logs were found
-        if ($SignInLogs -and $SignInLogs.Count -gt 0) {
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Retrieved total of $($SignInLogs.Count) Sign In logs"}
+        if ($AllSignInLogs -and $AllSignInLogs.Count -gt 0) {
+            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Retrieved total of $($AllSignInLogs.Count) Sign In logs"}
         else {
             Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),No SignIn logs found for the specified criteria"
             throw "No devices found for the specified criteria"
@@ -1028,16 +1080,16 @@ try {
     try {
         #Prepare filter and properties to get primary users
         $GraphProperties = 'deviceDetail,userPrincipalName,userId'
-        $GraphFilters = ""
+        $GraphFilterString = ""
         #Get primary users with invoke-mggraphrequestbatch
         $AllPrimaryUsers = invoke-mggraphrequestbatch `
             -RunProfile 'beta' `
             -Method 'GET' `
             -Object 'deviceManagement/managedDevices' `
-            -Objects $Devices `
+            -Objects $AllDevices `
             -Query '/users' `
             -Properties $GraphProperties `
-            -Filters $GraphFilters `
+            -Filters $GraphFilterString `
             -BatchSize $BatchSize `
             -WaitTime $WaitTime `
             -MaxRetry $MaxRetry
@@ -1045,7 +1097,7 @@ try {
         #Verify if primary users were found
         if ($AllPrimaryUsers -and $AllPrimaryUsers.Count -gt 0) {
             Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Retrieved total of $($AllPrimaryUsers.Count) Primary Users"
-            $script:Progress.Total = $AllPrimaryUsers.Count}
+            $script:ReportProgress.Total = $AllPrimaryUsers.Count}
         else {
             Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),No Primary Users found for the specified criteria"
             throw "No Primary Users found for the specified criteria"
@@ -1059,12 +1111,13 @@ try {
     }
       
 # Process results and update progress
-    foreach ($device in $Devices) {
+    foreach ($device in $AllDevices) {
         # Initialize variables used in the loop
-        $PrimaryUser = $null
+        $PrimaryUser = "NoOldPrimaryUserFound"
+        $MostFrequentUserPrincipalName = "NoNewPrimaryUserFound"
         $SignInUsers = $null
         $MostFrequentUser = $null
-        $script:Progress.Current++
+
     
         try {
             # Get current Primary User
@@ -1074,17 +1127,15 @@ try {
                     $PrimaryUser = $PrimaryUserHash.body.value.userPrincipalName
                     Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Success to get Primary User $($PrimaryUser) for $($Device.DeviceName)"
                 } else {
-                    $PrimaryUser = ""
                     Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Primary user for device $($Device.DeviceName) is missing or invalid"
                 }
             }
             else {
-                $PrimaryUser = ""
                 Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Primary user for device $($Device.DeviceName) is missing in the hash table"
             }
     
             # Get sign-in logs for the device
-            $SignInLogsOnDevice = $SignInLogs | Where-Object {
+            $SignInLogsOnDevice = $AllSignInLogs | Where-Object {
                 $_.deviceDetail.deviceId -eq $Device.AzureAdDeviceId -and (
                     $EnrollmentAccounts.Count -lt 1 -or $_.userPrincipalName -notmatch $EnrollmentAccountsFilter
                 )
@@ -1095,11 +1146,12 @@ try {
             }
             else {
                 Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Device $($Device.DeviceName) is skipped due to missing Sign-In logs"
-                $script:Progress.Skipped++
-                $script:ProcessResults.Enqueue([PSCustomObject]@{
-                    Object  = $Device.DeviceName
-                    Value = $PrimaryUser
-                    Status      = "Skipped due to missing Sign-In logs"
+                $script:ReportProgress.Skipped++
+                $script:ReportResults.Enqueue([PSCustomObject]@{
+                    Object   = $Device.DeviceName
+                    OldValue = $PrimaryUser
+                    NewValue = $MostFrequentUserPrincipalName
+                    Status   = "Skipped: Missing Sign-In logs for the device"
                 })
                 continue
             }
@@ -1116,13 +1168,11 @@ try {
                     if ($MostFrequentUser.group[0] -and $MostFrequentUser.group[0].PSObject.Properties['userPrincipalName']) {
                         $MostFrequentUserPrincipalName = $MostFrequentUser.group[0].PSObject.Properties['userPrincipalName'].Value
                     } else {
-                        $MostFrequentUserPrincipalName = $null
                     }
 
                     if ($MostFrequentUser.group[0] -and $MostFrequentUser.group[0].PSObject.Properties['UserId']) {
                         $MostFrequentUserID = $MostFrequentUser.group[0].PSObject.Properties['UserId'].Value
                     } else {
-                        $MostFrequentUserID = $null
                     }
     
                     if ($MostFrequentUserPrincipalName -and $MostFrequentUserID -and ($MostFrequentUserPrincipalName -ne $PrimaryUser)) {
@@ -1144,73 +1194,80 @@ try {
                                         -Object "deviceManagement/managedDevices/$($Device.id)/users/`$ref"
 
                                     Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Successfully set Primary User $($MostFrequentUserPrincipalName) for device $($Device.DeviceName)"
-                                    $script:Progress.Success++
-                                    $script:ProcessResults.Enqueue([PSCustomObject]@{
-                                        Object = $Device.DeviceName
-                                        Value   = $MostFrequentUserPrincipalName
-                                        Status     = "Success: Set Primary User to $($MostFrequentUserPrincipalName)"
+                                    $script:ReportProgress.Success++
+                                    $script:ReportResults.Enqueue([PSCustomObject]@{
+                                        Object   = $Device.DeviceName
+                                        OldValue  = $PrimaryUser
+                                        NewValue  = $MostFrequentUserPrincipalName
+                                        Status   = "Success: Primary User set to $($MostFrequentUserPrincipalName)"
                                     })
                                 }
                                 catch {
-                                    Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Failed to set Primary User $($MostFrequentUserPrincipalName) for device $($Device.DeviceName) with error: $_"
-                                    $script:Progress.Failed++
-                                    $script:ProcessResults.Enqueue([PSCustomObject]@{
-                                        Object = $Device.DeviceName
-                                        Value   = $MostFrequentUserPrincipalName
-                                        Status     = "Failed: error: $_"
+                                    Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Failed to set Primary User $($MostFrequentUserPrincipalName) for device $($Device.DeviceName) with error: $($_.Exception.Message)"
+                                    $script:ReportProgress.Failed++
+                                    $script:ReportResults.Enqueue([PSCustomObject]@{
+                                        Object    = $Device.DeviceName
+                                        OldValue  = $PrimaryUser
+                                        NewValue  = $MostFrequentUserPrincipalName
+                                        Status    = "Failed: With error: $($_.Exception.Message)"
                                     })
                                 }
                             } else {
                                 Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),WhatIf: Would set Primary User $($MostFrequentUserPrincipalName) for device $($Device.DeviceName)"
-                                $script:Progress.Skipped++
-                                $script:ProcessResults.Enqueue([PSCustomObject]@{
-                                    Object = $Device.DeviceName
-                                    Value   = $MostFrequentUserPrincipalName
-                                    Status     = "WhatIf: Would set Primary User to $($MostFrequentUserPrincipalName)"
+                                $script:ReportProgress.Whatif++
+                                $script:ReportResults.Enqueue([PSCustomObject]@{
+                                    Object    = $Device.DeviceName
+                                    OldValue  = $PrimaryUser
+                                    NewValue  = $MostFrequentUserPrincipalName
+                                    Status    = "WhatIf: Would set primary User to $($MostFrequentUserPrincipalName)"
                                 })
                             }
                     }
                     else {
                         Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Device $($Device.DeviceName) already has the correct Primary User $($PrimaryUser)"
-                        $script:Progress.Skipped++
-                        $script:ProcessResults.Enqueue([PSCustomObject]@{
-                            Object = $Device.DeviceName
-                            Value   = $PrimaryUser
-                            Status     = "Skipped: Correct Primary User $($PrimaryUser)"
+                        $script:ReportProgress.Skipped++
+                        $script:ReportResults.Enqueue([PSCustomObject]@{
+                            Object    = $Device.DeviceName
+                            OldValue  = $PrimaryUser
+                            NewValue  = $MostFrequentUserPrincipalName
+                            Status    = "Skipped: Correct Primary User $($PrimaryUser)"
                         })
                     }
                 }
                 else {
                     Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),No valid user data found in sign-in logs for device $($Device.DeviceName)"
-                    $script:Progress.Skipped++
-                    $script:ProcessResults.Enqueue([PSCustomObject]@{
-                        Object = $Device.DeviceName
-                        Value   = $PrimaryUser
-                        Status     = "Skipped: No valid user data found in sign-in logs"
+                    $script:ReportProgress.Skipped++
+                    $script:ReportResults.Enqueue([PSCustomObject]@{
+                        Object    = $Device.DeviceName
+                        OldValue  = $PrimaryUser
+                        NewValue  = $MostFrequentUserPrincipalName
+                        Status    = "Skipped: Missing a most frequent user in sign-in logs"
                     })
                 }
             }
             else {
                 Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),No SignIn logs found for device $($Device.DeviceName)"
-                $script:Progress.Skipped++
-                $script:ProcessResults.Enqueue([PSCustomObject]@{
-                    Object = $Device.DeviceName
-                    Value   = $PrimaryUser
-                    Status     = "Skipped: No SignIn logs found"
+                $script:ReportProgress.Skipped++
+                $script:ReportResults.Enqueue([PSCustomObject]@{
+                    Object    = $Device.DeviceName
+                    OldValue  = $PrimaryUser
+                    NewValue   = $MostFrequentUserPrincipalName
+                    Status    = "Skipped: Missing SignIn logs for the device"
                 })
             }
         }
         catch {
             Write-Error "$($script:GetTimestamp.Invoke()),Error,$($MyInvocation.MyCommand.Name),Failed to process device $($Device.DeviceName): $_"
-            $script:Progress.Failed++
-            $script:ProcessResults.Enqueue([PSCustomObject]@{
-                Object = $Device.DeviceName
-                Value   = $PrimaryUser
-                Status     = "Failed: error: $_"
+            $script:ReportProgress.Failed++
+            $script:ReportResults.Enqueue([PSCustomObject]@{
+                Object    = $Device.DeviceName
+                OldValue  = $PrimaryUser
+                NewValue   = $MostFrequentUserPrincipalName
+                Status     = "Failed: With error: $_"
             })
         }
     }
-    Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Processing complete. Success: $($script:Progress.Success), Failed: $($script:Progress.Failed), Skipped: $($script:Progress.Skipped)"
+    Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Processing complete. Success: $($script:ReportProgress.Success), Failed: $($script:ReportProgress.Failed), Skipped: $($script:ReportProgress.Skipped)"
     $script:EndTime = [datetime]::Now
 }
 catch {
@@ -1218,54 +1275,28 @@ catch {
 }
 finally {
 # Generate report if requested
-    if ($ReturnReport) {
-        if($DetailedReport) {
-            Invoke-ScriptReport -DetailedReport $true -ScriptAction $ScriptAction -ScriptStartTime $Script:StartTime -ScriptEndTime $script:EndTime
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info, Generating detailed report"
-        }
-        else {
-            Invoke-ScriptReport -DetailedReport $false -ScriptAction $ScriptAction -ScriptStartTime $Script:StartTime -ScriptEndTime $script:EndTime
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info, Generating summary report"
-        }
+    if ($ReturnReport -and $DetailedReport -and $script:ReportResults.Count -gt 0) {
+        Invoke-ScriptReport -DetailedReport $true -ScriptAction "$($MyInvocation.MyCommand.Name)" -ScriptStartTime $Script:StartTime -ScriptEndTime $script:EndTime
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name) Generated detailed report"
+    } elseif ($ReturnReport -and $script:ReportResults.Count -gt 0) {
+        Invoke-ScriptReport -DetailedReport $false -ScriptAction "$($MyInvocation.MyCommand.Name)" -ScriptStartTime $Script:StartTime -ScriptEndTime $script:EndTime
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name) Generated summary report"
     }
-
-# Disconnect and cleanup
+    # Disconnect from Graph
     try {
-        # Disconnect from Graph
-        try {
-            Disconnect-MgGraph -ErrorAction SilentlyContinue *>$null
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Disconnected from Graph"
-        } catch {
-            Write-Error "$(([DateTime]::Now).ToString('yyyy-MM-dd HH:mm:ss')),Error,$($MyInvocation.MyCommand.Name),Failed to disconnect from Graph: $_"
-        }
-        # Clear essential variables
-        $script:ProcessResults = $null
-        $script:ProcessErrors = $null
-        $script:Progress = $null
-        $MgGraphAccessToken = $null
-        
-        # Cleanup memory after executing a function
-        try {
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Script memory usage before cleanup: $MemoryUsage MB"
-            [System.GC]::Collect()
-            $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-            Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Script memory usage after cleanup: $MemoryUsage MB"
-            # Get all variables in the script scope
-            $scriptVariables = Get-Variable -Scope Script | Where-Object {$_.Name -notin @("PSBoundParameters","MyInvocation","args","StackTrace","Error","ExecutionContext","Matches")}
-            # Remove each variable from the script scope
-            foreach ($variable in $scriptVariables) {
-                try {Remove-Variable -Name $variable.Name -Scope Script -ErrorAction SilentlyContinue}
-                catch {Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Failed to remove variable '$($variable.Name)': $_"}
-            }
-        }
-        catch {
-            Write-Error "$(([DateTime]::Now).ToString('yyyy-MM-dd HH:mm:ss')),Error,$($MyInvocation.MyCommand.Name),Script failed to cleanup memory garbage: $_"
-        }
-    }
-    catch {
-        Write-Error "$(([DateTime]::Now).ToString('yyyy-MM-dd HH:mm:ss')),Error,$($MyInvocation.MyCommand.Name),Failed to cleanup: $_"
-    }
-
+        Disconnect-MgGraph -ErrorAction SilentlyContinue *>$null
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Disconnected from Graph"
+    } catch {Write-Error "$(([DateTime]::Now).ToString('yyyy-MM-dd HH:mm:ss')),Error,$($MyInvocation.MyCommand.Name),Failed to disconnect from Graph: $_"}
+    
+    # Restore original preference settings
+    try {
+        $ErrorActionPreference = $OriginalErrorActionPreference
+        $VerbosePreference = $OriginalVerbosePreference
+        $WhatIfPreference = $OriginalWhatIfPreference
+        Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Restored original preference settings."
+    } catch {Write-Warning "$($script:GetTimestamp.Invoke()),Warning,$($MyInvocation.MyCommand.Name),Failed to restore original preference settings: $_"}
+    # End script and report memory usage 
+    $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+    Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
