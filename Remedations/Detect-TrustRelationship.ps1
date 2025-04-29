@@ -19,7 +19,7 @@
 #endregion
 
 #region -------------------------------------------------[Modifiable Parameters]-------------------------------------------------
-$domainFQDN = "hufvudstaden.se" #Set the domain FQDN to check trust relationship with
+$domainFQDN = "tbone.se" #Set the domain FQDN to check trust relationship with
 
 #region --------------------------------------------------[Script Execution]-----------------------------------------------------
 #Get domain controller if domain controller is available
