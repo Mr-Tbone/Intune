@@ -109,8 +109,8 @@ param(
     [ValidateRange(1,10)]
     [int]$MaxRetry                  = 3,
 
-    [Parameter(Mandatory = $false,          HelpMessage = "Testmode, same as -WhatIf. Default is true")]
-        [bool]$Testmode             = $false
+    [Parameter(Mandatory = $false,          HelpMessage = "Testmode or `$ExecutionMode, same as -WhatIf. Default is true")]
+        [bool]$Testmode             = $true
     )
 #endregion
 
@@ -1299,4 +1299,5 @@ finally {
     $MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
     Write-Verbose "$($script:GetTimestamp.Invoke()),Info,$($MyInvocation.MyCommand.Name),Script finished. Memory usage: $MemoryUsage MB"
 }
+
 #endregion
