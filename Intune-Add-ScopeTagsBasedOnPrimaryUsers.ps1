@@ -152,7 +152,7 @@ if (-not (Get-Module -Name $moduleName)) {
 
 #region ---------------------------------------------------[Static Variables]------------------------------------------------------
 # Required Graph API scopes for Invoke-ConnectMgGraph function
-[System.Collections.ArrayList]$requiredScopes = "DeviceManagementManagedDevices.ReadWrite.All", "AuditLog.Read.All", "User.Read.All"
+[System.Collections.ArrayList]$requiredScopes = "DeviceManagementManagedDevices.ReadWrite.All", "AuditLog.Read.All", "User.Read.All", "DeviceManagementRBAC.Read.All"
 
 # Script execution tracking
 [datetime]$Script:StartTime                 = ([DateTime]::Now) # Script start time
@@ -1537,4 +1537,5 @@ finally {
         Write-Verbose "Generated summary report"
     } else {Write-Verbose "Report generation not requested or no results to report"}
 }
+
 #endregion
