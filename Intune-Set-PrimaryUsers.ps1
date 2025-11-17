@@ -58,6 +58,7 @@
     6.0.2510.3 - Improved logic and performance of the user sign-in data processing
     6.0.2510.4 - Added a fallback for windows devices with no Windows sign-in logs, to use application sign-in logs instead
     6.0.2510.5 - New parameters for keep and replace accounts
+    6.0.2511.1 - New parameter for Intune only or also include co-managed
 #>
 
 #region ---------------------------------------------------[Set Script Requirements]-----------------------------------------------
@@ -75,6 +76,9 @@ param(
     [Parameter(Mandatory = $false,          HelpMessage = "Device operatingsystems to process ('All', 'Windows', 'Android', 'iOS', 'macOS'). Default is 'Windows'")]
     [ValidateSet('All', 'Windows', 'Android', 'iOS', 'macOS')]
     [string[]]$OperatingSystems     = @('Windows'),
+            
+    [Parameter(Mandatory = $false,          HelpMessage = "Filter Intune only managed devices (true) or also include Co-managed devices (false). Default is true")]
+    [bool]$IntuneOnly               = $true,
     
     [Parameter(Mandatory = $false,          HelpMessage = "Filter to only include devicenames that starts with specific strings like ('Tbone', 'Desktop'). Default is blank")]
     [string[]]$IncludedDeviceNames  = @(),
@@ -946,9 +950,11 @@ try {
             Write-Verbose "Using OS filter: $GraphFilterString"
         }
         else {Write-Verbose "No OS filter applied (retrieving all operating systems)"}
-        # Add filter for Intune managed devices only in co-managed environment
-        if ($GraphFilterString) {$GraphFilterString = "managementAgent eq 'mdm' and " + $GraphFilterString}
-        else {$GraphFilterString = "managementAgent eq 'mdm' "}
+        # Add filter for Intune managed devices or also include co-managed environment
+        if ($IntuneOnly) {
+            if ($GraphFilterString) {$GraphFilterString = "managementAgent eq 'mdm' and " + $GraphFilterString}
+            else {$GraphFilterString = "managementAgent eq 'mdm' "}
+        }
         # Get graph objects
         $AllDevices = Invoke-MgGraphRequestSingle `
             -RunProfile 'beta' `
@@ -1366,4 +1372,5 @@ finally {
         Write-Verbose "Generated summary report"
     } else {Write-Verbose "Report generation not requested or no results to report"}
 }
+
 #endregion
