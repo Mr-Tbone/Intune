@@ -29,7 +29,8 @@
     4.0 2025-03-21 New functions and new structure for the script
     5.0 2025-04-09 Changed all requests to use invoke-mggraphrequets and support Powershell 5.1 and 7.4
     5.1 2025-04-10 Changed sorting and selecting from the sign-in logs and overall performance improvements
-    6.0 2025-10-27 A complete rewrite of the processes due to changes in Microsoft Graph, now 10x faster and more reliable 
+    6.0 2025-10-27 A complete rewrite of the processes due to changes in Microsoft Graph, now 10x faster and more reliable
+    6.1 2025-11-24 Bug fixes with DeviceTimeSpan 
 
 .AUTHOR
     Tbone Granheden
@@ -59,6 +60,7 @@
     6.0.2510.4 - Added a fallback for windows devices with no Windows sign-in logs, to use application sign-in logs instead
     6.0.2510.5 - New parameters for keep and replace accounts
     6.0.2511.1 - New parameter for Intune only or also include co-managed
+    6.1.2511.2 - Bug fixes with DeviceTimeSpan
 #>
 
 #region ---------------------------------------------------[Set Script Requirements]-----------------------------------------------
@@ -950,11 +952,20 @@ try {
             Write-Verbose "Using OS filter: $GraphFilterString"
         }
         else {Write-Verbose "No OS filter applied (retrieving all operating systems)"}
+        # Add filter for device active time span
+        if ($DeviceTimeSpan -gt 0) { 
+            $timeThreshold = (Get-Date).AddDays(-$DeviceTimeSpan).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            if ($GraphFilterString) {$GraphFilterString = "lastSyncDateTime ge $timeThreshold and " + $GraphFilterString
+            } else {$GraphFilterString = "lastSyncDateTime ge $timeThreshold"}
+            Write-Verbose "Using device last sync time filter: lastSyncDateTime ge $timeThreshold"
+        }
+        else {Write-Verbose "No device last sync time filter applied"}
         # Add filter for Intune managed devices or also include co-managed environment
         if ($IntuneOnly) {
             if ($GraphFilterString) {$GraphFilterString = "managementAgent eq 'mdm' and " + $GraphFilterString}
             else {$GraphFilterString = "managementAgent eq 'mdm' "}
         }
+        else {Write-Verbose "No management agent filter applied"}
         # Get graph objects
         $AllDevices = Invoke-MgGraphRequestSingle `
             -RunProfile 'beta' `
@@ -1374,3 +1385,4 @@ finally {
 }
 
 #endregion
+
