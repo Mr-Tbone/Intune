@@ -14,7 +14,7 @@
     torbjorn.granheden@coligo.se
 
 .VERSION
-    1.1.2
+    1.1.3
 .RELEASENOTES
     1.0.0 2024-01-04 Initial Build
     1.1.0 2025-12-22 Minor update version handling
@@ -37,6 +37,7 @@
     1.1.0 2025-12-22 Minor update version handling
     1.1.1 2025-12-22 Fix: Improved error handling
     1.1.2 2025-12-22 Fix: Improved error handling
+    1.1.3 2025-12-22 Fix: Improved error handling
 #>
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
 #endregion
@@ -112,6 +113,9 @@ disconnect-mggraph
 
 
 
+
+
+# Test change
 
 
 # Test change
