@@ -14,11 +14,9 @@
     torbjorn.granheden@coligo.se
 
 .VERSION
-    3.0.3
+    1.0.0
 .RELEASENOTES
-    1.0 2024-01-04 Initial Build
-    2.0.0 2025-12-22 Major update: test version bump hook
-    3.0.0 2025-12-22 Major update: test version bump hook
+    1.0.0 2024-01-04 Initial Build
 
 .AUTHOR
     Tbone Granheden 
@@ -34,8 +32,7 @@
     Feel free to use this, But would be grateful if My name is mentioned in Notes 
 
 .CHANGELOG
-    3.0.2 2025-12-22 
-    3.0.3 2025-12-22 Fixed: test changelog append
+1.0.0 2024-01-04 Initial Build
 #>
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
 #endregion
@@ -86,6 +83,7 @@ foreach($AppRole in $AppRoles)
   }
 
 disconnect-mggraph
+
 
 
 
