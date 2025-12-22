@@ -14,8 +14,9 @@
     torbjorn.granheden@coligo.se
 
 .VERSION
-    2.0.0
+    3.0.0
 .RELEASENOTES
+    3.0.0 2025-12-22 Major update: test version bump hook
     2.0.0 2025-12-22 Major update: test version bump hook
     1.0 2024-01-04 Initial Build
 
@@ -33,6 +34,7 @@
     Feel free to use this, But would be grateful if My name is mentioned in Notes 
 
 .CHANGELOG
+    3.0.0 2025-12-22 Major update: test version bump hook
     2.0.0 2025-12-22 Major update: test version bump hook
     1.0.2401.1 - Initial Version
 #>
@@ -86,4 +88,5 @@ foreach($AppRole in $AppRoles)
   }
 
 disconnect-mggraph
+
 
