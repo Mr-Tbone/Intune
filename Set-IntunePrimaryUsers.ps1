@@ -19,8 +19,7 @@
     Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
 
 .VERSION
-    6.1
-
+    6.1.1
 .RELEASENOTES
     1.0 2023-02-14 Initial Build
     2.0 2021-03-01 Large update to use Graph batching and reduce runtime
@@ -63,6 +62,7 @@
     6.1.2511.2 - Bug fixes with DeviceTimeSpan and changed the name of the script to Set-IntunePrimaryUsers.ps1
     6.1.2512.1 - Added Certificate based auth and app based auth support in Invoke-ConnectMgGraph function
     6.2 2512.1 - Added versions on functions to keep track of changes, aslo worked through declarations, comments and fixed minor bugs
+    6.1.1 2025-12-22 Fixed a better connect with parameter check
 #>
 
 #region ---------------------------------------------------[Set Script Requirements]-----------------------------------------------
@@ -1154,17 +1154,16 @@ Invoke-TboneLog -Mode Start -LogToGUI $LogToGUI -LogToEventlog $LogToEventlog -L
 try {
     #Sign in to Graph
     try {
-        # Build authentication parameters - pass only non-empty values to function
-        [hashtable]$authParams = @{ RequiredScopes = $RequiredScopes }
-        if (-not [string]::IsNullOrWhiteSpace($AuthTenantId))                   { $authParams['AuthTenantId']       = $AuthTenantId }
-        if (-not [string]::IsNullOrWhiteSpace($AuthClientId))                   { $authParams['AuthClientId']       = $AuthClientId }
-        if ($null -ne $AuthClientSecret -and $AuthClientSecret.Length -gt 0)    { $authParams['AuthClientSecret']   = $AuthClientSecret }
-        if (-not [string]::IsNullOrWhiteSpace($AuthCertThumbprint))             { $authParams['AuthCertThumbprint'] = $AuthCertThumbprint }
-        if (-not [string]::IsNullOrWhiteSpace($AuthCertName))                   { $authParams['AuthCertName']       = $AuthCertName }
-        if (-not [string]::IsNullOrWhiteSpace($AuthCertPath))                   { $authParams['AuthCertPath']       = $AuthCertPath }
-        if ($null -ne $AuthCertPassword)                                        { $authParams['AuthCertPassword']   = $AuthCertPassword }
+        # Build authentication parameters to pass only non-empty values. If no values are provided, default interactive auth or managed identity auth will be used.
+        [hashtable]$authParams = @{}
+        @{AuthTenantId = $AuthTenantId; AuthClientId = $AuthClientId; AuthCertThumbprint = $AuthCertThumbprint; AuthCertName = $AuthCertName; AuthCertPath = $AuthCertPath}.GetEnumerator() `
+            | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) } `
+            | ForEach-Object { $authParams[$_.Key] = $_.Value }
+        # Add SecureString parameters that require different null checks
+        if ($AuthClientSecret -and $AuthClientSecret.Length -gt 0) { $authParams['AuthClientSecret'] = $AuthClientSecret }
+        if ($AuthCertPassword -and $AuthCertPassword.Length -gt 0) { $authParams['AuthCertPassword'] = $AuthCertPassword }
         # Invoke connection to Microsoft Graph with specified authentication parameters
-        Invoke-ConnectMgGraph @authParams
+        Invoke-ConnectMgGraph @authParams -RequiredScopes $RequiredScopes
         Write-Verbose "Success to get Access Token to Graph"
     }
     catch {
