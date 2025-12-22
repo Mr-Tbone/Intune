@@ -10,7 +10,7 @@
     will assign specified permissions on an Azure Automation Account with settings in the modifyable region. 
 
 .NOTES
-    Written by Mr-Tbone (Tbone Granheden) Coligo AB
+    Written by Mr-Tbone (Tbone Granheden) @Coligo AB 
     torbjorn.granheden@coligo.se
 
 .VERSION
@@ -83,5 +83,5 @@ foreach($AppRole in $AppRoles)
       -BodyParameter $AppRoleAssignment `
       -Verbose
   }
-  
+
 disconnect-mggraph
