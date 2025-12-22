@@ -14,10 +14,10 @@
     torbjorn.granheden@coligo.se
 
 .VERSION
-    1.0.1
+    1.1.1
 .RELEASENOTES
     1.0.0 2024-01-04 Initial Build
-   
+    1.1.0 2025-12-22 Minor update version handling
 .AUTHOR
     Tbone Granheden 
     @MrTbone_se
@@ -34,6 +34,8 @@
 .CHANGELOG
     1.0.0 2024-01-04 Initial Build
     1.0.1 2025-12-22 Fixed automatic version handling
+    1.1.0 2025-12-22 Minor update version handling
+    1.1.1 2025-12-22 Fix: Improved error handling
 #>
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
 #endregion
@@ -84,6 +86,9 @@ foreach($AppRole in $AppRoles)
   }
 
 disconnect-mggraph
+
+
+
 
 
 
