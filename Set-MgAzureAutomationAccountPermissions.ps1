@@ -14,7 +14,7 @@
     torbjorn.granheden@coligo.se
 
 .VERSION
-    2.0.0
+    2.0.1
 .RELEASENOTES
     1.0.0 2024-01-04 Initial Build
     1.1.0 2025-12-22 
@@ -37,6 +37,7 @@
     1.0.1 2025-12-22 
     1.1.0 2025-12-22 
     2.0.0 2025-12-22 
+    2.0.1 2025-12-22 Fix: Added better error handling
 #>
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
 #endregion
@@ -87,6 +88,7 @@ foreach($AppRole in $AppRoles)
   }
 
 disconnect-mggraph
+
 
 
 
