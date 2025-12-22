@@ -14,14 +14,10 @@
     torbjorn.granheden@coligo.se
 
 .VERSION
-    4.0.0
+    1.0.0
 .RELEASENOTES
     1.0.0 2024-01-04 Initial Build
-    2.0.0 2025-12-22 Major: Complete rewrite of permissions logic
-    3.0.0 2025-12-22 Major: Complete rewrite of permissions logic
-    3.1.0 2025-12-22 Minor bump minor version
-    4.0.0 2025-12-22 Major bump version
-    
+   
 .AUTHOR
     Tbone Granheden 
     @MrTbone_se
@@ -37,10 +33,6 @@
 
 .CHANGELOG
     1.0.0 2024-01-04 Initial Build
-    2.0.0 2025-12-22 Major: Complete rewrite of permissions logic
-    3.0.0 2025-12-22 Major: Complete rewrite of permissions logic
-    3.1.0 2025-12-22 Minor bump minor version
-    4.0.0 2025-12-22 Major bump version
 #>
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
 #endregion
@@ -91,6 +83,7 @@ foreach($AppRole in $AppRoles)
   }
 
 disconnect-mggraph
+
 
 
 
