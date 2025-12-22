@@ -88,5 +88,3 @@ foreach($AppRole in $AppRoles)
   }
 
 disconnect-mggraph
-
-
