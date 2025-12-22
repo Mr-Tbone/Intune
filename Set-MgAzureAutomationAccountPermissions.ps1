@@ -14,7 +14,7 @@
     torbjorn.granheden@coligo.se
 
 .VERSION
-    3.0.2
+    3.0.3
 .RELEASENOTES
     1.0 2024-01-04 Initial Build
     2.0.0 2025-12-22 Major update: test version bump hook
@@ -35,6 +35,7 @@
 
 .CHANGELOG
     3.0.2 2025-12-22 
+    3.0.3 2025-12-22 Fixed: test changelog append
 #>
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
 #endregion
@@ -85,5 +86,6 @@ foreach($AppRole in $AppRoles)
   }
 
 disconnect-mggraph
+
 
 
