@@ -83,4 +83,4 @@ foreach($AppRole in $AppRoles)
       -BodyParameter $AppRoleAssignment `
       -Verbose
   }
-disconnect-mggraph
+disconnect-mggraph -Verbose
