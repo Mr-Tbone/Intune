@@ -16,9 +16,9 @@
 .VERSION
     3.0.0
 .RELEASENOTES
-    3.0.0 2025-12-22 Major update: test version bump hook
-    2.0.0 2025-12-22 Major update: test version bump hook
     1.0 2024-01-04 Initial Build
+    2.0.0 2025-12-22 Major update: test version bump hook
+    3.0.0 2025-12-22 Major update: test version bump hook
 
 .AUTHOR
     Tbone Granheden 
@@ -34,9 +34,9 @@
     Feel free to use this, But would be grateful if My name is mentioned in Notes 
 
 .CHANGELOG
+    1.0.0 - Initial Version
     3.0.0 2025-12-22 Major update: test version bump hook
     2.0.0 2025-12-22 Major update: test version bump hook
-    1.0.2401.1 - Initial Version
 #>
 
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
