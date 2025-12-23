@@ -19,7 +19,7 @@
     Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
 
 .VERSION
-    6.1.1
+    7.0.0
 .RELEASENOTES
     1.0 2023-02-14 Initial Build
     2.0 2021-03-01 Large update to use Graph batching and reduce runtime
@@ -30,7 +30,7 @@
     6.0 2025-10-27 A complete rewrite of the processes due to changes in Microsoft Graph, now 10x faster and more reliable
     6.1 2025-11-24 Bug fixes with DeviceTimeSpan 
     6.2 2025-12-19 Added versions on functions to keep track of changes, aslo worked through declarations, comments and fixed minor bugs
-
+    7.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
 .AUTHOR
     T-bone Granheden
     @MrTbone_se
@@ -63,6 +63,7 @@
     6.1.2512.1 - Added Certificate based auth and app based auth support in Invoke-ConnectMgGraph function
     6.2 2512.1 - Added versions on functions to keep track of changes, aslo worked through declarations, comments and fixed minor bugs
     6.1.1 2025-12-22 Fixed a better connect with parameter check
+    7.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
 #>
 
 #region ---------------------------------------------------[Set Script Requirements]-----------------------------------------------
@@ -75,7 +76,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     
-    [Parameter(Mandatory = $false,          HelpMessage = "Name of the script action for logging. Default is 'Intune Primary User'")]
+    [Parameter(Mandatory = $false,          HelpMessage = "Name of the script action for logging.")]
     [string]$ScriptActionName       = "Set Intune Primary User",
 
     [Parameter(Mandatory = $false,          HelpMessage = "Device operatingsystems to process ('All', 'Windows', 'Android', 'iOS', 'macOS'). Default is 'Windows'")]
@@ -183,7 +184,11 @@ param(
 [string]$AppId_Windows           = '38aa3b87-a06d-4817-b275-7a316988d93b'  # Windows Sign In
 [string]$AppId_Windows_Fallback  = 'fc0f3af4-6835-4174-b806-f7db311fd2f3'  # Microsoft Intune Windows Agent. Fallback if no Windows Sign In logs are found
 # Required Graph API scopes for Invoke-ConnectMgGraph functions
-[System.Collections.ArrayList]$requiredScopes = "DeviceManagementManagedDevices.ReadWrite.All", "AuditLog.Read.All", "User.Read.All"
+[System.Collections.ArrayList]$requiredScopes = @(
+    "DeviceManagementManagedDevices.ReadWrite.All",     # Read/write Intune device to set Primary Users
+    "AuditLog.Read.All",                                # Read sign-in logs
+    "User.Read.All"                                     # Read users
+)
 #endregion
 
 #region ---------------------------------------------------[Set global script settings]--------------------------------------------
@@ -191,7 +196,6 @@ param(
 if ($env:IDENTITY_ENDPOINT -and $env:IDENTITY_HEADER -and $PSVersionTable.PSVersion -eq [version]"7.2.0") {
     Write-Error "This script cannot run as a managed identity in PowerShell 7.2. Please use a different version of PowerShell."
     exit 1}
-
 # set strict mode to latest version
 Set-StrictMode -Version Latest
 
@@ -218,17 +222,11 @@ if (-not (Get-Module -Name $moduleName)) {
 # Script execution tracking for reporting
 [datetime]$Script:StartTime = ([DateTime]::Now) # Script start time
 
-# Initialize hashtable and a small helper inline function for reporting function (invoke-scriptreport)
+# Initialize hashtable and helper for reporting (used by invoke-scriptreport)
 [hashtable]$ReportResults = @{}
 [scriptblock]$addReport = {param($Target,$OldValue,$NewValue,$Action,$Details)
     if(-not $ReportResults.ContainsKey($Action)){$ReportResults[$Action]=[System.Collections.ArrayList]::new()}
     $null=$ReportResults[$Action].Add([PSCustomObject]@{Target=$Target;OldValue=$OldValue;NewValue=$NewValue;Action=$Action;Details=$Details})}
-
-# Data collection variables - initialized dynamically during script execution
-[datetime]$SignInsStartTime = (Get-Date).AddDays(-$SigninsTimeSpan) # Sign-in logs start time
-
-# JSON depth for ConvertTo-Json - PS 5.1 has depth limit issues, PS 6+ supports deeper
-[int]$JsonDepth = if ($PSVersionTable.PSVersion -ge [version]"6.0.0") { 10 } else { 2 }
 #endregion
 
 #region ---------------------------------------------------[Functions]------------------------------------------------------------
@@ -550,6 +548,734 @@ function Invoke-TboneLog {
         function Script:Write-Error{$m="$args";$c=(Get-PSCallStack)[1];$r="Row$($c.ScriptLineNumber)";$e="$(_Time),ERROR,$r,$(_ID),$m";$global:_l.Add($e);if($global:_g){if($global:_az){Microsoft.PowerShell.Utility\Write-Error $m}else{Microsoft.PowerShell.Utility\Write-Host $e -ForegroundColor Red}};if($ErrorActionPreference -eq 'Stop'){_Save;_Clean;exit}}
     }
 }
+function Invoke-MgGraphRequestSingle {
+<#
+.SYNOPSIS
+    Makes a single Graph API call with Invoke-MgGraphRequest and support for filtering, property selection, and count queries.
+.DESCRIPTION
+    Makes Graph API calls using Invoke-MgGraphRequest but add automatic pagination, throttling handling, and exponential backoff retry logic.
+    Supports filtering, property selection, and count queries. Returns all pages of results automatically.
+.NOTES
+    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
+.VERSION
+    2.1
+.RELEASENOTES
+    1.0 Initial version
+    2.0 Fixed some small bugs with throttling handling
+    2.1 Added more error handling for Post/Patch methods
+#>
+[CmdletBinding()]
+    Param(
+        [Parameter(                 HelpMessage = "The Graph API version ('beta' or 'v1.0')")]
+        [ValidateSet('beta', 'v1.0')]
+        [string]$GraphRunProfile     = "v1.0",
+    
+        [Parameter(                 HelpMessage = "The HTTP method for the request(e.g., 'GET', 'PATCH', 'POST', 'DELETE')")]
+        [ValidateSet('GET', 'PATCH', 'POST', 'DELETE')]
+        [String]$GraphMethod         = "GET",
+        
+        [Parameter(Mandatory=$true, HelpMessage = "The Graph API endpoint path to target (e.g., 'me', 'users', 'groups')")]
+        [ValidateNotNullOrEmpty()]
+        [string]$GraphObject,
+
+        [Parameter(                 HelpMessage = "Request body for POST/PATCH operations")]
+        [string[]]$GraphBody,
+        
+        [Parameter(                 HelpMessage = "Graph API properties to include")]
+        [string[]]$GraphProperties,
+    
+        [Parameter(                 HelpMessage = "Graph API filters to apply")]
+        [string]$GraphFilters,
+    
+        [Parameter(                 HelpMessage = "Page size (Default is the maximum 1000 objects per page)")]
+        [ValidateRange(1,1000)]
+        [int]$GraphPageSize          = 999,
+
+        [Parameter(                 HelpMessage = "Skip pagination and only get the first page. (Default is false)")]
+        [bool]$GraphSkipPagination   = $false,
+
+        [Parameter(                 HelpMessage = "Include count of total items. Adds ConsistencyLevel header. (Default is false)")]
+        [bool]$GraphCount            = $false,
+
+        [Parameter(                 HelpMessage = "Delay in milliseconds between requests if throttled")]
+        [ValidateRange(100,5000)]
+        [int]$GraphWaitTime         = 1000,
+
+        [Parameter(                 HelpMessage = "Maximum retry attempts for failed requests when throttled")]
+        [ValidateRange(1,10)]
+        [int]$GraphMaxRetry         = 3
+    )
+
+    Begin {
+        # Initialize variables
+        [nullable[int]]$TotalCount = $null
+        [System.Collections.ArrayList]$PsobjectResults = [System.Collections.ArrayList]::new()
+        [int]$RetryCount = 0
+        [string]$uri = "https://graph.microsoft.com/$GraphRunProfile/$GraphObject"
+        [System.Collections.ArrayList]$GraphQueryParams = [System.Collections.ArrayList]::new()
+
+        # Add Count parameter to Query if requested
+        if ($GraphCount) {[void]$GraphQueryParams.Add("`$count=true")}
+
+        # Add page size parameter to Query if specified
+        if ($GraphMethod -eq 'GET') {[void]$GraphQueryParams.Add("`$top=$GraphPageSize")}
+
+        # Add properties to Query if specified
+        if ($GraphProperties) {
+            [string]$select = $GraphProperties -join ','
+            [void]$GraphQueryParams.Add("`$select=$select")
+        }
+
+        # Add filters to Query if specified
+        if ($GraphFilters) {
+            [void]$GraphQueryParams.Add("`$filter=$([System.Web.HttpUtility]::UrlEncode($GraphFilters))")
+        }
+
+        # Combine query parameters into URI
+        if ($GraphQueryParams.Count -gt 0) {$uri += "?" + ($GraphQueryParams -join '&')}
+    }
+
+    Process {
+        do {
+            try {
+                Write-Verbose "Making request to: $uri"
+                $i = 1
+                do {
+                    $response = $null
+                    Write-Verbose "Requesting page $i with $GraphPageSize items"
+                    # Set default parameters for Invoke-MgGraphRequest
+                    $params = @{
+                        Method      = $GraphMethod
+                        Uri         = $uri
+                        ErrorAction = 'Stop'
+                        OutputType  = 'PSObject'
+                        Verbose     = $false
+                    }
+                    # Add ConsistencyLevel header if Count is requested
+                    if ($GraphCount) { $params['Headers'] = @{ 'ConsistencyLevel' = 'eventual' } }
+
+                    # Add additional parameters based on method
+                    if ($GraphMethod -in 'POST', 'PATCH') {
+                        $params['Body'] = $GraphBody
+                        if (-not $params.ContainsKey('Headers')) {
+                            $params['Headers'] = @{}
+                        }
+                        $params['Headers']['Content-Type'] = 'application/json'
+                        write-verbose "Request body: $($GraphBody | ConvertTo-Json -Depth 10)"
+                    }
+                    # Send request to Graph API
+                    try {
+                        $response = Invoke-MgGraphRequest @params
+                        Write-Verbose "Request successful"
+                    }
+                    catch {
+                        # Check if this is an expired skip token error
+                        if ($_.Exception.Message -match "Skip token.*expired|Skip token is null") {
+                            Write-Warning "Skip token has expired on page $i after collecting $($PsobjectResults.Count) items. Returning collected data."
+                            # Exit pagination loop and return what we have
+                            $uri = $null
+                            break
+                        }
+                        # For other errors, log and re-throw to outer catch
+                        Write-Verbose "Request failed with error: $($_.Exception.Message)"
+                        throw
+                    }
+                    if ($GraphMethod -in 'POST', 'PATCH', 'DELETE') {return $response}
+                    if ($response.value) {[void]$PsobjectResults.AddRange($response.value)}
+                    # Capture count from first response if requested
+                    if ($GraphCount -and $null -eq $TotalCount -and $response.'@odata.count') {
+                        $TotalCount = $response.'@odata.count'
+                        Write-Verbose "Total count available: $TotalCount items"
+                    }
+                    Write-Verbose "Retrieved page $i, Now total: $($PsobjectResults.Count) items"
+
+                    # Check for next page
+                    if ($GraphSkipPagination) {
+                        Write-Verbose "SkipPagination enabled, stopping after first page"
+                        $uri = $null
+                    }
+                    elseif ($response.PSObject.Properties.Name -contains '@odata.nextLink') {
+                        if ($response.'@odata.nextLink') {
+                            $uri = $response.'@odata.nextLink'
+                            Write-Verbose "Next page found: $uri"
+                        }
+                        else {
+                            Write-Verbose "No @odata.nextLink value, stopping pagination"
+                            $uri = $null
+                        }
+                    }
+                    else {
+                        Write-Verbose "No more pages found"
+                        $uri = $null
+                    }
+
+                    $i++
+                } while ($uri)
+                Write-Verbose "Completed pagination. Returning array with $($PsobjectResults.Count) items"
+                
+                # Return results with count if requested
+                if ($GraphCount -and $null -ne $TotalCount) {
+                    return [PSCustomObject]@{
+                        Items = $PsobjectResults
+                        Count = $TotalCount
+                    }
+                }
+                return $PsobjectResults # Success, return results and exit retry loop
+            }
+            catch {
+                [string]$ErrorMessage = $_.Exception.Message
+                # Get full error string including nested JSON messages for better pattern matching
+                [string]$FullErrorString = $_ | Out-String
+                Write-Warning "Request failed (Retry attempt $($RetryCount + 1)/$GraphMaxRetry): $ErrorMessage"
+
+                # First check for throttling in error message (Invoke-MgGraphRequest may internally retry and throw with embedded 429 info)
+                if ($ErrorMessage -match "TooManyRequests|Too Many Requests|429" -or $FullErrorString -match "TooManyRequests|Too Many Requests|429") {
+                    # Throttling detected from error message - use exponential backoff
+                    [int]$Delay = [math]::Min(($GraphWaitTime * ([math]::Pow(2, $RetryCount + 1))), 60000)
+                    Write-Warning "Throttling detected from error message. Waiting $Delay milliseconds before retrying."
+                    Start-Sleep -Milliseconds $Delay
+                }
+                # Check if the exception has response details (standard HTTP errors)
+                elseif ($_.Exception.PSObject.Properties.Name -contains 'Response' -and $_.Exception.Response) {
+                    [object]$StatusCode = $_.Exception.Response.StatusCode
+
+                    # Use switch to handle specific status codes (handle both enum names and numeric values)
+                    switch ($StatusCode) {
+                        {$_ -eq 429 -or $_ -eq 'TooManyRequests'} { # Throttling
+                            $RetryAfter = $_.Exception.Response.Headers["Retry-After"]
+                            if ($RetryAfter) {
+                                Write-Warning "Throttling detected (429). Waiting $($RetryAfter * 1000) milliseconds before retrying."
+                                Start-Sleep -Milliseconds ($RetryAfter * 1000)
+                            } else {
+                                [int]$Delay = [math]::Min(($GraphWaitTime * ([math]::Pow(2, $RetryCount))), 60000)
+                                Write-Warning "Throttling detected (429). No Retry-After header found. Waiting $Delay milliseconds before retrying."
+                                Start-Sleep -Milliseconds $Delay
+                            }
+                            # Break not needed, will fall through to retry logic below
+                        }
+                        {$_ -eq 404 -or $_ -eq 'NotFound'} { # Not Found
+                            # For DELETE operations, 404 means already deleted - treat as success
+                            if ($GraphMethod -eq 'DELETE') {
+                                Write-Verbose "Resource not found (404) - treating as already deleted"
+                                return [PSCustomObject]@{ id = $GraphObject; status = 204; note = 'Already deleted' }
+                            }
+                            Write-Warning "Resource not found (404). Error: $ErrorMessage"
+                            throw "$ErrorMessage (Object Deleted/No User License)"
+                        }
+                        {$_ -eq 400 -or $_ -eq 'BadRequest'} { # Bad Request                            
+                            if ($ErrorMessage -match "Skip token.*expired|Skip token is null" -or $FullErrorString -match "Skip token.*expired|Skip token is null") {# Check if this is an expired skip token error
+                                Write-Warning "Skip token has expired after collecting $($PsobjectResults.Count) items. Returning collected data."
+                                return $PsobjectResults
+                            }
+                            if ($ErrorMessage -match "does not have intune license or is deleted" -or $FullErrorString -match "does not have intune license or is deleted") { # Check if no license, common for Intune queries
+                                Write-Warning "Object Deleted or User has no Intune license"
+                                return "$ErrorMessage (Object Deleted/No User License)"
+                            }
+                            # For DELETE operations, "not found" patterns mean already removed - treat as success
+                            if ($GraphMethod -eq 'DELETE' -and ($ErrorMessage -imatch 'does not exist|not found|cannot be found|no longer exists|was not found|resource .+ not found' -or $FullErrorString -imatch 'does not exist|not found|cannot be found|no longer exists')) {
+                                Write-Verbose "Object already removed or not found (400) - treating as success"
+                                return [PSCustomObject]@{ id = $GraphObject; status = 204; note = 'Already removed' }
+                            }
+                            # For POST operations, "already exists" patterns mean already created - treat as success
+                            if ($GraphMethod -eq 'POST' -and ($ErrorMessage -imatch 'already exist|duplicate|conflict|references already exist|object reference already exist' -or $FullErrorString -imatch 'already exist|duplicate|conflict')) {
+                                Write-Verbose "Object already exists (400) - treating as success"
+                                return [PSCustomObject]@{ id = $GraphObject; status = 200; note = 'Already exists' }
+                            }
+                            Write-Error "Bad request (400). Error: $ErrorMessage"
+                            throw $_
+                        }
+                        {$_ -eq 403 -or $_ -eq 'Forbidden'} { # Forbidden / Access Denied
+                             Write-Error "Access denied (403). Error: $ErrorMessage"
+                             throw $_
+                        }
+                        default { # Other HTTP errors - Use generic retry
+                            [int]$Delay = [math]::Min(($GraphWaitTime * ([math]::Pow(2, $RetryCount))), 60000)
+                            Write-Warning "HTTP error $StatusCode. Waiting $Delay milliseconds before retrying."
+                            Start-Sleep -Milliseconds $Delay
+                            # Break not needed, will fall through to retry logic below
+                        }
+                    }
+                } else {
+                    # Non-HTTP errors (e.g., network issues, DNS resolution) - Use generic retry
+                    [int]$Delay = [math]::Min(($GraphWaitTime * ([math]::Pow(2, $RetryCount))), 60000)
+                    Write-Warning "Non-HTTP error. Waiting $Delay milliseconds before retrying. Error: $ErrorMessage"
+                    Start-Sleep -Milliseconds $Delay
+                }
+
+                # Increment retry count and check if max retries exceeded ONLY if not already thrown
+                $RetryCount++
+                if ($RetryCount -gt $GraphMaxRetry) {
+                     Write-Error "Request failed after $($GraphMaxRetry) retries. Aborting."
+                     throw "Request failed after $($GraphMaxRetry) retries. Last error: $ErrorMessage"
+                }
+                # If retries not exceeded and error was potentially retryable (e.g., 429, other HTTP, non-HTTP), the loop will continue
+            }
+        } while ($RetryCount -le $GraphMaxRetry)
+
+        Write-Error "Request failed after $($GraphMaxRetry) retries. Aborting."
+        throw "Request failed after $($GraphMaxRetry) retries." # Re-throw the exception after max retries
+    }
+
+    End {
+        # End function and report memory usage 
+        [double]$MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+        Write-Verbose "Function finished. Memory usage: $MemoryUsage MB"
+    }
+}
+function invoke-mgGraphRequestBatch {
+<#
+.SYNOPSIS
+        Processes multiple Graph API requests in batches for improved performance.
+
+.DESCRIPTION
+        Sends Graph API requests in batches (up to 20 per batch) to efficiently process large numbers of objects.
+        Handles throttling, retries, and provides progress tracking. Supports GET, PATCH, POST, and DELETE operations.
+.NOTES
+    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
+.VERSION
+    1.2
+.RELEASENOTES
+    1.0 Initial version
+    1.1 Added version on function to keep track of changes, minor bug fixes
+    1.2 Added more error handling for Post/Patch methods
+    1.3 Added a new parameter GraphNoObjectIdInUrl to allow requests where objectId should not be appended to the URL
+#>
+    #>
+    [CmdletBinding()]
+    Param(
+        [Parameter(
+            HelpMessage = "The Graph API version ('beta' or 'v1.0')")]
+        [ValidateSet('beta', 'v1.0')]
+        [string]$GraphRunProfile = "v1.0",
+    
+        [Parameter(
+            HelpMessage = "The HTTP method for the request(e.g., 'GET', 'PATCH', 'POST', 'DELETE')")]
+        [ValidateSet('GET', 'PATCH', 'POST', 'DELETE')]
+        [String]$GraphMethod = "GET",
+        
+        [Parameter(
+            HelpMessage = "The Graph API endpoint path to target (e.g., 'me', 'users', 'groups')")]
+        [string]$GraphObject,
+    
+        [Parameter(
+            HelpMessage = "Array of objects to process in batches")]
+        [System.Object[]]$GraphObjects,
+
+        [Parameter(HelpMessage = "Do not append objectId to the request URL (useful for endpoints like POST groups/id/members)")]
+        [bool]$GraphNoObjectIdInUrl = $false,
+    
+        [Parameter(
+            HelpMessage = "The Graph API query on the objects")]
+        [string]$GraphQuery,
+    
+        [Parameter(HelpMessage = "Request body for POST/PATCH operations")]
+        [object]$GraphBody,
+        
+        [Parameter(HelpMessage = "Graph API properties to include")]
+        [string[]]$GraphProperties,
+    
+        [Parameter(HelpMessage = "Graph API filters to apply")]
+        [string]$GraphFilters,
+    
+        [Parameter(HelpMessage = "Batch size (max 20 objects per batch)")]
+        [ValidateRange(1,20)]
+        [int]$GraphBatchSize = 20,
+    
+        [Parameter(HelpMessage = "Delay between batches in milliseconds")]
+        [ValidateRange(100,5000)]
+        [int]$GraphWaitTime = 1000,
+    
+        [Parameter(HelpMessage = "Maximum retry attempts for failed requests")]
+        [ValidateRange(1,10)]
+        [int]$GraphMaxRetry = 3
+    )
+    
+    Begin {
+        $ErrorActionPreference = 'Stop'
+        [scriptblock]$script:GetTimestamp = { ([DateTime]::Now).ToString('yyyy-MM-dd HH:mm:ss') }
+        [datetime]$starttime = Get-Date
+        [int]$Retrycount = 0
+        [int]$TotalObjects = $GraphObjects.Count
+        
+        # Pre-allocate collections with capacity for better performance
+        [System.Collections.Generic.List[PSObject]]$CollectedObjects = [System.Collections.Generic.List[PSObject]]::new($TotalObjects)
+        [System.Collections.Generic.List[PSObject]]$RetryObjects = [System.Collections.Generic.List[PSObject]]::new()
+        
+        # Check execution context once
+        [bool]$ManagedIdentity = [bool]$env:AUTOMATION_ASSET_ACCOUNTID
+        Write-Verbose "Running in $(if ($ManagedIdentity) { 'Azure Automation' } else { 'interactive PowerShell' }) context"
+        
+        # Pre-calculate common values to avoid repeated work
+        [string]$batchUri = "https://graph.microsoft.com/$GraphRunProfile/`$batch"
+        [hashtable]$batchHeaders = @{'Content-Type' = 'application/json'}
+        
+        # Build URL query parameters once (they're the same for all requests)
+        [string]$urlQueryString = $null
+        if ($GraphProperties -or $GraphFilters) {
+            [System.Collections.Generic.List[string]]$urlParams = [System.Collections.Generic.List[string]]::new()
+            if ($GraphProperties) {
+                $urlParams.Add("`$select=$($GraphProperties -join ',')")
+            }
+            if ($GraphFilters) {
+                $urlParams.Add("`$filter=$([System.Web.HttpUtility]::UrlEncode($GraphFilters))")
+            }
+            $urlQueryString = "?" + ($urlParams -join '&')
+        }
+        
+        # Pre-determine if method needs body/headers (avoid repeated checks)
+        [bool]$needsBody = $GraphMethod -in 'PATCH','POST'
+        [string]$contentTypeHeader = if ($needsBody) { 'application/json' } else { $null }
+        
+        Write-Verbose "Graph batch processing initialized for $TotalObjects objects"
+    }
+    
+    Process {
+        try {
+            do {
+                [int]$currentObject = 0
+                $RetryObjects.Clear()
+                
+                # Process objects in batches
+                for($i = 0; $i -lt $GraphObjects.Count; $i += $GraphBatchSize) {
+                    # Calculate batch boundaries
+                    [int]$batchEnd = [Math]::Min($i + $GraphBatchSize, $GraphObjects.Count)
+                    [int]$batchCount = $batchEnd - $i
+                    
+                    # Pre-allocate request array with exact size
+                    [System.Collections.ArrayList]$req = [System.Collections.ArrayList]::new($batchCount)
+                    
+                    # Build batch requests (optimized loop)
+                    for ($j = $i; $j -lt $batchEnd; $j++) {
+                        [object]$obj = $GraphObjects[$j]
+                        [string]$url = if ($GraphNoObjectIdInUrl) { "/$GraphObject$GraphQuery" } else { "/$GraphObject/$($obj.id)$GraphQuery" }
+                        if ($urlQueryString) { $url += $urlQueryString }
+                        
+                        # Use object's body if available, otherwise use the global Body parameter
+                        [object]$requestBody = if ($obj.PSObject.Properties.Name -contains 'body' -and $obj.body) {
+                            $obj.body
+                        } elseif ($needsBody) {
+                            $GraphBody
+                        } else {
+                            $null
+                        }
+                        
+                        [void]$req.Add(@{
+                            'id' = $obj.id
+                            'method' = $GraphMethod
+                            'url' = $url
+                            'body' = $requestBody
+                            'headers' = @{ 'Content-Type' = $contentTypeHeader }
+                        })
+                    }
+                    
+                    Write-Verbose "Sending batch $([Math]::Floor($i/$GraphBatchSize) + 1): items $($i+1) to $batchEnd of $($GraphObjects.Count)"
+                    
+                    # Send batch request
+                    try {
+                        [string]$batchBody = @{'requests' = $req} | ConvertTo-Json -Depth 10 -Compress
+                        [object]$responses = Invoke-MgGraphRequest -Method POST -Uri $batchUri -Body $batchBody -Headers $batchHeaders -Verbose:$false
+                        Write-Verbose "Batch request successful with $($req.Count) requests"
+                    }
+                    catch {
+                        Write-Error "Failed to send batch request: $($_.Exception.Message)"
+                        throw
+                    }
+                    
+                    # Process responses (optimized with direct property access)
+                    [int]$throttledCount = 0
+                    foreach ($response in $responses.responses) {
+                        $currentObject++
+                        
+                        # Handle response by status code
+                        switch ($response.status) {
+                            {$_ -in 200,201,204} { # Success cases
+                                # Extract the actual device object from response.body
+                                if ($response.body) {
+                                    # Convert hashtable to PSCustomObject if needed
+                                    [object]$GraphBodyObject = if ($response.body -is [hashtable]) {
+                                        [PSCustomObject]$response.body
+                                    } else {
+                                        $response.body
+                                    }
+                                    [void]$CollectedObjects.Add($GraphBodyObject)
+                                    Write-Verbose "Success ($($response.status)) for request $($response.id) with body"
+                                } else {
+                                    # For 204 No Content (PATCH/DELETE), return a success indicator with the request ID
+                                    [PSCustomObject]$successObject = [PSCustomObject]@{
+                                        id = $response.id
+                                        status = $response.status
+                                    }
+                                    [void]$CollectedObjects.Add($successObject)
+                                    Write-Verbose "Success ($($response.status)) for request $($response.id) - no body returned"
+                                }
+                            }
+                            400 { # Bad request - check error details for expected failures
+                                # Extract error message from response body
+                                [string]$errorCode = $null
+                                [string]$errorMessage = $null
+                                if ($response.body -and $response.body.error) {
+                                    $errorCode = $response.body.error.code
+                                    $errorMessage = $response.body.error.message
+                                }
+                                
+                                # For DELETE operations, common "not found" patterns mean already removed - treat as success
+                                if ($GraphMethod -eq 'DELETE' -and ($errorMessage -imatch 'does not exist|not found|cannot be found|no longer exists|was not found|resource .+ not found')) {
+                                    Write-Verbose "Object $($response.id) already removed or not found (400: $errorCode)"
+                                    [PSCustomObject]$successObject = [PSCustomObject]@{
+                                        id = $response.id
+                                        status = 204  # Treat as successful removal
+                                        note = 'Already removed'
+                                    }
+                                    [void]$CollectedObjects.Add($successObject)
+                                }
+                                # For POST operations, "already exists" patterns mean already created - treat as success
+                                elseif ($GraphMethod -eq 'POST' -and ($errorMessage -imatch 'already exist|duplicate|conflict|references already exist|object reference already exist')) {
+                                    Write-Verbose "Object $($response.id) already exists (400: $errorCode)"
+                                    [PSCustomObject]$successObject = [PSCustomObject]@{
+                                        id = $response.id
+                                        status = 200  # Treat as successful (already exists)
+                                        note = 'Already exists'
+                                    }
+                                    [void]$CollectedObjects.Add($successObject)
+                                }
+                                else {
+                                    # Unexpected 400 error - log and add to retry
+                                    Write-Error "Bad request (400) for object $($response.id): $errorCode - $errorMessage"
+                                    [void]$RetryObjects.Add($response)
+                                }
+                            }
+                            403 { # Access denied - don't retry
+                                Write-Error "Access denied (403) for object $($response.id) - Check permissions"
+                            }
+                            404 { # Not found - for DELETE treat as success, for others log warning
+                                if ($GraphMethod -eq 'DELETE') {
+                                    Write-Verbose "Object $($response.id) not found (404) - treating as already removed"
+                                    [PSCustomObject]$successObject = [PSCustomObject]@{
+                                        id = $response.id
+                                        status = 204
+                                        note = 'Not found - already removed'
+                                    }
+                                    [void]$CollectedObjects.Add($successObject)
+                                } else {
+                                    Write-Warning "Resource not found (404) for object $($response.id)"
+                                }
+                            }
+                            429 { # Throttling - retry with backoff
+                                Write-Warning "Throttling (429) for object $($response.id)"
+                                [void]$RetryObjects.Add($response)
+                                $throttledCount++
+                            }
+                            default { # Other errors - retry
+                                Write-Error "Unexpected status ($($response.status)) for object $($response.id)"
+                                [void]$RetryObjects.Add($response)
+                            }
+                        }
+                    }
+                    
+                    # Show progress (only in interactive mode)
+                    if (-not $ManagedIdentity) {
+                        [double]$percentComplete = ($currentObject / $TotalObjects) * 100
+                        [timespan]$elapsed = (Get-Date) - $starttime
+                        [timespan]$timeLeft = if ($currentObject -gt 0) {
+                            [TimeSpan]::FromMilliseconds(($elapsed.TotalMilliseconds / $currentObject) * ($TotalObjects - $currentObject))
+                        } else { [TimeSpan]::Zero }
+                        
+                        Write-Progress -Activity "Processing Graph Batch Requests" `
+                            -Status "Progress: $currentObject/$TotalObjects | Estimated Time Left: $($timeLeft.ToString('hh\:mm\:ss')) | Throttled: $throttledCount | Retry: $Retrycount/$GraphMaxRetry" `
+                            -PercentComplete $percentComplete
+                    }
+                    
+                    # Handle throttling with exponential backoff (only if throttled responses exist)
+                    if ($throttledCount -gt 0) {
+                        # Extract retry-after values efficiently
+                        [array]$retryAfterValues = @($RetryObjects | 
+                            Where-Object { $_.status -eq 429 -and $_.headers.'retry-after' } | 
+                            Select-Object -ExpandProperty headers | 
+                            Select-Object -ExpandProperty 'retry-after')
+                        
+                        [int]$waitSeconds = if ($retryAfterValues -and $retryAfterValues.Count -gt 0) {
+                            [Math]::Min(($retryAfterValues | Measure-Object -Maximum).Maximum + ($Retrycount * 2), 30)
+                        } else {
+                            [Math]::Min(1 + ($Retrycount * 2), 30)
+                        }
+                        
+                        Write-Warning "Throttling detected, waiting $waitSeconds seconds (Retry: $Retrycount)"
+                        Start-Sleep -Seconds $waitSeconds
+                    }
+                }
+                
+                # Prepare for retry if needed
+                if ($RetryObjects.Count -gt 0 -and $Retrycount -lt $GraphMaxRetry) {
+                    $Retrycount++
+                    Write-Verbose "Starting retry $Retrycount with $($RetryObjects.Count) objects"
+                    
+                    # Create lookup hashtable for faster filtering
+                    [hashtable]$retryIdHash = @{}
+                    foreach ($r in $RetryObjects) { $retryIdHash[$r.id] = $true }
+                    
+                    # Filter objects to retry
+                    $Objects = $Objects | Where-Object { $retryIdHash.ContainsKey($_.id) }
+                }
+                
+            } while ($RetryObjects.Count -gt 0 -and $Retrycount -lt $GraphMaxRetry)
+            
+            # Clear progress bar if used
+            if (-not $ManagedIdentity) {
+                Write-Progress -Activity "Processing Graph Batch Requests" -Completed
+            }
+            
+            Write-Verbose "Successfully processed $($CollectedObjects.Count) of $TotalObjects objects"
+            return $CollectedObjects
+        }
+        catch {
+            Write-Error "Function failed in main process block: $($_.Exception.Message)"
+            throw
+        }
+    }
+    
+    End {
+        # Report memory usage
+        [double]$MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+        [timespan]$duration = (Get-Date) - $starttime
+        Write-Verbose "Function $($MyInvocation.MyCommand.Name) finished in $($duration.ToString('mm\:ss')) | Memory: $MemoryUsage MB"
+    }
+}
+function Convert-PSObjectArrayToHashTables {
+<#
+.SYNOPSIS
+    Converts PSObject arrays to optimized hashtables for fast O(1) lookups.
+.DESCRIPTION
+    Creates Generic.Dictionary hashtables from PSObject arrays using specified properties as keys.
+    Returns single or multiple hashtables indexed by property values for efficient data retrieval.
+.NOTES
+    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
+.VERSION
+    1.2
+.RELEASENOTES
+    1.0 Initial version
+    1.1 Removed pipeline support, optimized property checks, added capacity pre-allocation
+    1.2 Added StringComparer.OrdinalIgnoreCase for correct UPN/ID lookups and improved error handling
+#>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true,  HelpMessage = "Array of PSObjects to convert to hashtables")]
+        [PSObject[]]$PSObjectArray,
+
+        [Parameter(Mandatory = $true,  HelpMessage = "Property names to use as keys for hashtables")]
+        [string[]]$IdProperties
+    )
+
+    Begin {
+        $ErrorActionPreference = 'Stop'
+        Write-Verbose "Starting conversion of $($PSObjectArray.Count) objects using $($IdProperties.Count) index propert$(if($IdProperties.Count -eq 1){'y'}else{'ies'})"
+        
+        # Validate inputs
+        try {
+            if ($null -eq $PSObjectArray -or $PSObjectArray.Count -eq 0) {
+                throw "PSObjectArray is null or empty"
+            }
+            if ($null -eq $IdProperties -or $IdProperties.Count -eq 0) {
+                throw "IdProperties is null or empty"
+            }
+        }
+        catch {
+            Write-Error "Input validation failed: $($_.Exception.Message)"
+            throw
+        }
+    }
+
+    Process {
+        try {
+            # Pre-calculate capacity for better memory allocation
+            [int]$capacity = $PSObjectArray.Count
+
+            # Single index requested (most common)
+            if ($IdProperties.Count -eq 1) {
+                try {
+                    [string]$IdProperty = $IdProperties[0]
+                    [System.Collections.Generic.Dictionary[string,object]]$HashTable = [System.Collections.Generic.Dictionary[string,object]]::new($capacity, [System.StringComparer]::OrdinalIgnoreCase)
+
+                    foreach ($PSObject in $PSObjectArray) {
+                        try {
+                            [object]$IdValue = $PSObject.$IdProperty
+                            if ($null -eq $IdValue) { continue }
+
+                            # Convert to string for dictionary key (handles int/guid IDs etc)
+                            [string]$key = $IdValue.ToString()
+                            if ($key.Length -eq 0) { continue }
+
+                            # Add to hashtable (overwrite if duplicate key exists)
+                            $HashTable[$key] = $PSObject
+                        }
+                        catch {
+                            Write-Warning "Failed to process object for property '$IdProperty': $($_.Exception.Message)"
+                            continue
+                        }
+                    }
+
+                    Write-Verbose "Converted $($HashTable.Count) objects to hashtable using property '$IdProperty'"
+                    return $HashTable
+                }
+                catch {
+                    Write-Error "Failed to create single-index hashtable for property '$IdProperty': $($_.Exception.Message)"
+                    throw
+                }
+            }
+
+            # Create hashtable collections for multiple indexes
+            try {
+                [hashtable]$HashTables = [hashtable]::new($IdProperties.Count)
+                foreach ($prop in $IdProperties) {
+                    try {
+                        $HashTables[$prop] = [System.Collections.Generic.Dictionary[string,object]]::new($capacity, [System.StringComparer]::OrdinalIgnoreCase)
+                    }
+                    catch {
+                        Write-Error "Failed to create dictionary for property '$prop': $($_.Exception.Message)"
+                        throw
+                    }
+                }
+            }
+            catch {
+                Write-Error "Failed to initialize hashtable collection: $($_.Exception.Message)"
+                throw
+            }
+
+            # Process all objects and populate hashtables
+            foreach ($PSObject in $PSObjectArray) {
+                foreach ($IdProperty in $IdProperties) {
+                    try {
+                        $IdValue = $PSObject.$IdProperty
+                        if ($null -eq $IdValue) { continue }
+
+                        $key = $IdValue.ToString()
+                        if ($key.Length -eq 0) { continue }
+
+                        $HashTables[$IdProperty][$key] = $PSObject
+                    }
+                    catch {
+                        Write-Warning "Failed to process object for property '$IdProperty': $($_.Exception.Message)"
+                        continue
+                    }
+                }
+            }
+            # Log conversion summary
+            foreach ($prop in $IdProperties) {
+                Write-Verbose "Converted $($HashTables[$prop].Count) objects to hashtable using property '$prop'"
+            }
+            return $HashTables
+        }
+        catch {
+            Write-Error "Failed to convert objects to hashtables: $($_.Exception.Message)"
+            throw
+        }
+    }
+
+    End {
+        # End function and report memory usage 
+        [double]$MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
+        Write-Verbose "Function finished. Memory usage: $MemoryUsage MB"
+    }
+}
 function Invoke-ScriptReport {
 <#
 .SYNOPSIS
@@ -746,405 +1472,6 @@ function Invoke-ScriptReport {
         Write-Verbose "Function finished. Memory usage: $MemoryUsage MB"
     }
 }
-
-function Invoke-MgGraphRequestSingle {
-<#
-.SYNOPSIS
-    Makes a single Graph API call with Invoke-MgGraphRequest and support for filtering, property selection, and count queries.
-.DESCRIPTION
-    Makes Graph API calls using Invoke-MgGraphRequest but add automatic pagination, throttling handling, and exponential backoff retry logic.
-    Supports filtering, property selection, and count queries. Returns all pages of results automatically.
-.NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
-.VERSION
-    2.0
-.RELEASENOTES
-    1.0 Initial version
-    2.0 Fixed some small bugs with throttling handling
-#>
-[CmdletBinding()]
-    Param(
-        [Parameter(                 HelpMessage = "The Graph API version ('beta' or 'v1.0')")]
-        [ValidateSet('beta', 'v1.0')]
-        [string]$GraphRunProfile     = "v1.0",
-    
-        [Parameter(                 HelpMessage = "The HTTP method for the request(e.g., 'GET', 'PATCH', 'POST', 'DELETE')")]
-        [ValidateSet('GET', 'PATCH', 'POST', 'DELETE')]
-        [String]$GraphMethod         = "GET",
-        
-        [Parameter(Mandatory=$true, HelpMessage = "The Graph API endpoint path to target (e.g., 'me', 'users', 'groups')")]
-        [ValidateNotNullOrEmpty()]
-        [string]$GraphObject,
-
-        [Parameter(                 HelpMessage = "Request body for POST/PATCH operations")]
-        [string[]]$GraphBody,
-        
-        [Parameter(                 HelpMessage = "Graph API properties to include")]
-        [string[]]$GraphProperties,
-    
-        [Parameter(                 HelpMessage = "Graph API filters to apply")]
-        [string]$GraphFilters,
-    
-        [Parameter(                 HelpMessage = "Page size (Default is the maximum 1000 objects per page)")]
-        [ValidateRange(1,1000)]
-        [int]$GraphPageSize          = 999,
-
-        [Parameter(                 HelpMessage = "Skip pagination and only get the first page. (Default is false)")]
-        [bool]$GraphSkipPagination   = $false,
-
-        [Parameter(                 HelpMessage = "Include count of total items. Adds ConsistencyLevel header. (Default is false)")]
-        [bool]$GraphCount            = $false,
-
-        [Parameter(                 HelpMessage = "Delay in milliseconds between requests if throttled")]
-        [ValidateRange(100,5000)]
-        [int]$GraphWaitTime         = 1000,
-
-        [Parameter(                 HelpMessage = "Maximum retry attempts for failed requests when throttled")]
-        [ValidateRange(1,10)]
-        [int]$GraphMaxRetry         = 3
-    )
-
-    Begin {
-        # Initialize variables
-        [nullable[int]]$TotalCount = $null
-        [System.Collections.ArrayList]$PsobjectResults = [System.Collections.ArrayList]::new()
-        [int]$RetryCount = 0
-        [string]$uri = "https://graph.microsoft.com/$GraphRunProfile/$GraphObject"
-        [System.Collections.ArrayList]$queryParams = [System.Collections.ArrayList]::new()
-
-        # Add Count parameter to Query if requested
-        if ($GraphCount) {[void]$queryParams.Add("`$count=true")}
-
-        # Add page size parameter to Query if specified
-        if ($GraphMethod -eq 'GET') {[void]$queryParams.Add("`$top=$GraphPageSize")}
-
-        # Add properties to Query if specified
-        if ($GraphProperties) {
-            [string]$select = $GraphProperties -join ','
-            [void]$queryParams.Add("`$select=$select")
-        }
-
-        # Add filters to Query if specified
-        if ($GraphFilters) {
-            [void]$queryParams.Add("`$filter=$([System.Web.HttpUtility]::UrlEncode($GraphFilters))")
-        }
-
-        # Combine query parameters into URI
-        if ($queryParams.Count -gt 0) {$uri += "?" + ($queryParams -join '&')}
-    }
-
-    Process {
-        do {
-            try {
-                Write-Verbose "Making request to: $uri"
-                $i = 1
-                do {
-                    $response = $null
-                    Write-Verbose "Requesting page $i with $GraphPageSize items"
-                    # Set default parameters for Invoke-MgGraphRequest
-                    $params = @{
-                        Method      = $GraphMethod
-                        Uri         = $uri
-                        ErrorAction = 'Stop'
-                        OutputType  = 'PSObject'
-                        Verbose     = $false
-                    }
-                    # Add ConsistencyLevel header if Count is requested
-                    if ($GraphCount) { $params['Headers'] = @{ 'ConsistencyLevel' = 'eventual' } }
-
-                    # Add additional parameters based on method
-                    if ($GraphMethod -in 'POST', 'PATCH') {
-                        $params['Body'] = $GraphBody
-                        if (-not $params.ContainsKey('Headers')) {
-                            $params['Headers'] = @{}
-                        }
-                        $params['Headers']['Content-Type'] = 'application/json'
-                        write-verbose "Request body: $($GraphBody | ConvertTo-Json -Depth 10)"
-                    }
-                    # Send request to Graph API
-                    try {
-                        $response = Invoke-MgGraphRequest @params
-                        Write-Verbose "Request successful"
-                    }
-                    catch {
-                        # Check if this is an expired skip token error
-                        if ($_.Exception.Message -match "Skip token.*expired|Skip token is null") {
-                            Write-Warning "Skip token has expired on page $i after collecting $($PsobjectResults.Count) items. Returning collected data."
-                            # Exit pagination loop and return what we have
-                            $uri = $null
-                            break
-                        }
-                        # For other errors, log and re-throw to outer catch
-                        Write-Verbose "Request failed with error: $($_.Exception.Message)"
-                        throw
-                    }
-                    if ($GraphMethod -in 'POST', 'PATCH', 'DELETE') {return $response}
-                    if ($response.value) {[void]$PsobjectResults.AddRange($response.value)}
-                    # Capture count from first response if requested
-                    if ($GraphCount -and $null -eq $TotalCount -and $response.'@odata.count') {
-                        $TotalCount = $response.'@odata.count'
-                        Write-Verbose "Total count available: $TotalCount items"
-                    }
-                    Write-Verbose "Retrieved page $i, Now total: $($PsobjectResults.Count) items"
-
-                    # Check for next page
-                    if ($GraphSkipPagination) {
-                        Write-Verbose "SkipPagination enabled, stopping after first page"
-                        $uri = $null
-                    }
-                    elseif ($response.PSObject.Properties.Name -contains '@odata.nextLink') {
-                        if ($response.'@odata.nextLink') {
-                            $uri = $response.'@odata.nextLink'
-                            Write-Verbose "Next page found: $uri"
-                        }
-                        else {
-                            Write-Verbose "No @odata.nextLink value, stopping pagination"
-                            $uri = $null
-                        }
-                    }
-                    else {
-                        Write-Verbose "No more pages found"
-                        $uri = $null
-                    }
-
-                    $i++
-                } while ($uri)
-                Write-Verbose "Completed pagination. Returning array with $($PsobjectResults.Count) items"
-                
-                # Return results with count if requested
-                if ($GraphCount -and $null -ne $TotalCount) {
-                    return [PSCustomObject]@{
-                        Items = $PsobjectResults
-                        Count = $TotalCount
-                    }
-                }
-                return $PsobjectResults # Success, return results and exit retry loop
-            }
-            catch {
-                [string]$ErrorMessage = $_.Exception.Message
-                # Get full error string including nested JSON messages for better pattern matching
-                [string]$FullErrorString = $_ | Out-String
-                Write-Warning "Request failed (Retry attempt $($RetryCount + 1)/$GraphMaxRetry): $ErrorMessage"
-
-                # First check for throttling in error message (Invoke-MgGraphRequest may internally retry and throw with embedded 429 info)
-                if ($ErrorMessage -match "TooManyRequests|Too Many Requests|429" -or $FullErrorString -match "TooManyRequests|Too Many Requests|429") {
-                    # Throttling detected from error message - use exponential backoff
-                    [int]$Delay = [math]::Min(($GraphWaitTime * ([math]::Pow(2, $RetryCount + 1))), 60000)
-                    Write-Warning "Throttling detected from error message. Waiting $Delay milliseconds before retrying."
-                    Start-Sleep -Milliseconds $Delay
-                }
-                # Check if the exception has response details (standard HTTP errors)
-                elseif ($_.Exception.PSObject.Properties.Name -contains 'Response' -and $_.Exception.Response) {
-                    [object]$StatusCode = $_.Exception.Response.StatusCode
-
-                    # Use switch to handle specific status codes (handle both enum names and numeric values)
-                    switch ($StatusCode) {
-                        {$_ -eq 429 -or $_ -eq 'TooManyRequests'} { # Throttling
-                            $RetryAfter = $_.Exception.Response.Headers["Retry-After"]
-                            if ($RetryAfter) {
-                                Write-Warning "Throttling detected (429). Waiting $($RetryAfter * 1000) milliseconds before retrying."
-                                Start-Sleep -Milliseconds ($RetryAfter * 1000)
-                            } else {
-                                [int]$Delay = [math]::Min(($GraphWaitTime * ([math]::Pow(2, $RetryCount))), 60000)
-                                Write-Warning "Throttling detected (429). No Retry-After header found. Waiting $Delay milliseconds before retrying."
-                                Start-Sleep -Milliseconds $Delay
-                            }
-                            # Break not needed, will fall through to retry logic below
-                        }
-                        {$_ -eq 404 -or $_ -eq 'NotFound'} { # Not Found
-                            Write-Warning "Resource not found (404). Error: $ErrorMessage"
-                            # Re-throw the original exception to signal failure to the caller immediately
-                            throw "$ErrorMessage (Object Deleted/No User License)"
-                        }
-                        {$_ -eq 400 -or $_ -eq 'BadRequest'} { # Bad Request                            
-                            if ($ErrorMessage -match "Skip token.*expired|Skip token is null" -or $FullErrorString -match "Skip token.*expired|Skip token is null") {# Check if this is an expired skip token error
-                                Write-Warning "Skip token has expired after collecting $($PsobjectResults.Count) items. Returning collected data."
-                                return $PsobjectResults
-                            }
-                            if ($ErrorMessage -match "does not have intune license or is deleted" -or $FullErrorString -match "does not have intune license or is deleted") { # Check if no license, common for Intune queries
-                                Write-Warning "Object Deleted or User has no Intune license"
-                                return "$ErrorMessage (Object Deleted/No User License)"
-                            }
-                            else {
-                                Write-Error "Bad request (400). Error: $ErrorMessage"
-                                throw $_
-                            }
-                        }
-                        {$_ -eq 403 -or $_ -eq 'Forbidden'} { # Forbidden / Access Denied
-                             Write-Error "Access denied (403). Error: $ErrorMessage"
-                             throw $_
-                        }
-                        default { # Other HTTP errors - Use generic retry
-                            [int]$Delay = [math]::Min(($GraphWaitTime * ([math]::Pow(2, $RetryCount))), 60000)
-                            Write-Warning "HTTP error $StatusCode. Waiting $Delay milliseconds before retrying."
-                            Start-Sleep -Milliseconds $Delay
-                            # Break not needed, will fall through to retry logic below
-                        }
-                    }
-                } else {
-                    # Non-HTTP errors (e.g., network issues, DNS resolution) - Use generic retry
-                    [int]$Delay = [math]::Min(($GraphWaitTime * ([math]::Pow(2, $RetryCount))), 60000)
-                    Write-Warning "Non-HTTP error. Waiting $Delay milliseconds before retrying. Error: $ErrorMessage"
-                    Start-Sleep -Milliseconds $Delay
-                }
-
-                # Increment retry count and check if max retries exceeded ONLY if not already thrown
-                $RetryCount++
-                if ($RetryCount -gt $GraphMaxRetry) {
-                     Write-Error "Request failed after $($GraphMaxRetry) retries. Aborting."
-                     throw "Request failed after $($GraphMaxRetry) retries. Last error: $ErrorMessage"
-                }
-                # If retries not exceeded and error was potentially retryable (e.g., 429, other HTTP, non-HTTP), the loop will continue
-            }
-        } while ($RetryCount -le $GraphMaxRetry)
-
-        Write-Error "Request failed after $($GraphMaxRetry) retries. Aborting."
-        throw "Request failed after $($GraphMaxRetry) retries." # Re-throw the exception after max retries
-    }
-
-    End {
-        # End function and report memory usage 
-        [double]$MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-        Write-Verbose "Function finished. Memory usage: $MemoryUsage MB"
-    }
-}
-
-function Convert-PSObjectArrayToHashTables {
-<#
-.SYNOPSIS
-    Converts PSObject arrays to optimized hashtables for fast O(1) lookups.
-.DESCRIPTION
-    Creates Generic.Dictionary hashtables from PSObject arrays using specified properties as keys.
-    Returns single or multiple hashtables indexed by property values for efficient data retrieval.
-.NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
-.VERSION
-    1.2
-.RELEASENOTES
-    1.0 Initial version
-    1.1 Removed pipeline support, optimized property checks, added capacity pre-allocation
-    1.2 Added StringComparer.OrdinalIgnoreCase for correct UPN/ID lookups and improved error handling
-#>
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true,  HelpMessage = "Array of PSObjects to convert to hashtables")]
-        [PSObject[]]$PSObjectArray,
-
-        [Parameter(Mandatory = $true,  HelpMessage = "Property names to use as keys for hashtables")]
-        [string[]]$IdProperties
-    )
-
-    Begin {
-        $ErrorActionPreference = 'Stop'
-        Write-Verbose "Starting conversion of $($PSObjectArray.Count) objects using $($IdProperties.Count) index propert$(if($IdProperties.Count -eq 1){'y'}else{'ies'})"
-        
-        # Validate inputs
-        try {
-            if ($null -eq $PSObjectArray -or $PSObjectArray.Count -eq 0) {
-                throw "PSObjectArray is null or empty"
-            }
-            if ($null -eq $IdProperties -or $IdProperties.Count -eq 0) {
-                throw "IdProperties is null or empty"
-            }
-        }
-        catch {
-            Write-Error "Input validation failed: $($_.Exception.Message)"
-            throw
-        }
-    }
-
-    Process {
-        try {
-            # Pre-calculate capacity for better memory allocation
-            [int]$capacity = $PSObjectArray.Count
-
-            # Single index requested (most common)
-            if ($IdProperties.Count -eq 1) {
-                try {
-                    [string]$IdProperty = $IdProperties[0]
-                    [System.Collections.Generic.Dictionary[string,object]]$HashTable = [System.Collections.Generic.Dictionary[string,object]]::new($capacity, [System.StringComparer]::OrdinalIgnoreCase)
-
-                    foreach ($PSObject in $PSObjectArray) {
-                        try {
-                            [object]$IdValue = $PSObject.$IdProperty
-                            if ($null -eq $IdValue) { continue }
-
-                            # Convert to string for dictionary key (handles int/guid IDs etc)
-                            [string]$key = $IdValue.ToString()
-                            if ($key.Length -eq 0) { continue }
-
-                            # Add to hashtable (overwrite if duplicate key exists)
-                            $HashTable[$key] = $PSObject
-                        }
-                        catch {
-                            Write-Warning "Failed to process object for property '$IdProperty': $($_.Exception.Message)"
-                            continue
-                        }
-                    }
-
-                    Write-Verbose "Converted $($HashTable.Count) objects to hashtable using property '$IdProperty'"
-                    return $HashTable
-                }
-                catch {
-                    Write-Error "Failed to create single-index hashtable for property '$IdProperty': $($_.Exception.Message)"
-                    throw
-                }
-            }
-
-            # Create hashtable collections for multiple indexes
-            try {
-                [hashtable]$HashTables = [hashtable]::new($IdProperties.Count)
-                foreach ($prop in $IdProperties) {
-                    try {
-                        $HashTables[$prop] = [System.Collections.Generic.Dictionary[string,object]]::new($capacity, [System.StringComparer]::OrdinalIgnoreCase)
-                    }
-                    catch {
-                        Write-Error "Failed to create dictionary for property '$prop': $($_.Exception.Message)"
-                        throw
-                    }
-                }
-            }
-            catch {
-                Write-Error "Failed to initialize hashtable collection: $($_.Exception.Message)"
-                throw
-            }
-
-            # Process all objects and populate hashtables
-            foreach ($PSObject in $PSObjectArray) {
-                foreach ($IdProperty in $IdProperties) {
-                    try {
-                        $IdValue = $PSObject.$IdProperty
-                        if ($null -eq $IdValue) { continue }
-
-                        $key = $IdValue.ToString()
-                        if ($key.Length -eq 0) { continue }
-
-                        $HashTables[$IdProperty][$key] = $PSObject
-                    }
-                    catch {
-                        Write-Warning "Failed to process object for property '$IdProperty': $($_.Exception.Message)"
-                        continue
-                    }
-                }
-            }
-            # Log conversion summary
-            foreach ($prop in $IdProperties) {
-                Write-Verbose "Converted $($HashTables[$prop].Count) objects to hashtable using property '$prop'"
-            }
-            return $HashTables
-        }
-        catch {
-            Write-Error "Failed to convert objects to hashtables: $($_.Exception.Message)"
-            throw
-        }
-    }
-
-    End {
-        # End function and report memory usage 
-        [double]$MemoryUsage = [Math]::Round(([System.GC]::GetTotalMemory($false) / 1MB), 2)
-        Write-Verbose "Function finished. Memory usage: $MemoryUsage MB"
-    }
-}
 #endregion
 
 #region ---------------------------------------------------[[Script Execution]------------------------------------------------------
@@ -1174,7 +1501,7 @@ try {
     # Get all devices from Graph
     try {
         # List properties to retrieve
-        [string]$GraphProperties = 'id,deviceName,operatingSystem,AzureAdDeviceId,userid'
+        [string]$GraphProperties = 'id,deviceName,operatingSystem,AzureAdDeviceId,userId'
         # Prepare filters
         [string]$GraphFilterString = $null
         # Add filter for Operating Systems
@@ -1208,7 +1535,7 @@ try {
             -GraphMaxRetry $GraphMaxRetry `
             -GraphWaitTime $GraphWaitTime
         # Initialize hashtables
-        $AllDevicesByIDHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
+        $AllDevicesByIdHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
         # Verify if objects were found   
         if ($AllDevices -and $AllDevices.Count -gt 0) {
             Write-Verbose "Retrieved $($AllDevices.Count) devices from Graph API"
@@ -1231,8 +1558,8 @@ try {
                 Write-Verbose "Remaining after filters: $($AllDevices.Count) devices"
             }
             # Create hashtable for fast lookups
-            $AllDevicesByIDHash = Convert-PSObjectArrayToHashTables -PSObjectArray $AllDevices -IdProperties @('id')
-            Write-Verbose "Created device lookup hashtable with $($AllDevicesByIDHash.Count) entries"
+            $AllDevicesByIdHash = Convert-PSObjectArrayToHashTables -PSObjectArray $AllDevices -IdProperties @('id')
+            Write-Verbose "Created device lookup hashtable with $($AllDevicesByIdHash.Count) entries"
         }
         else {Write-Warning "No devices found in tenant"}
     }
@@ -1244,7 +1571,7 @@ try {
     # Get all users from Graph
     try {
         # List properties to retrieve
-        [string]$GraphProperties = 'id,userPrincipalName,country'
+        [string]$GraphProperties = 'id,userPrincipalName'
         # Prepare filters
         [string]$GraphFilterString = $null
         # Get graph objects with single call
@@ -1456,7 +1783,7 @@ try {
 
         # Get current Primary User
         [object]$currentPrimaryUser = $null
-        [string]$currentPrimaryUserUPN = if ($device.userid -and $AllUsersByIdHash.TryGetValue($device.userid, [ref]$currentPrimaryUser)) {
+        [string]$currentPrimaryUserUPN = if ($device.userId -and $AllUsersByIdHash.TryGetValue($device.userId, [ref]$currentPrimaryUser)) {
             Write-Verbose "Current primary user: $($currentPrimaryUser.userPrincipalName) for device $deviceName"
             $currentPrimaryUser.userPrincipalName
         } else {
@@ -1543,11 +1870,11 @@ try {
                         -GraphWaitTime $GraphWaitTime
 
                     
-                    & $addReport -Target $deviceName -OldValue $currentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "Success" -Details "Primary User Set To $MostFrequentUserUPN"
+                    & $addReport -Target $deviceName -OldValue $currentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "Success-Updated" -Details "Primary User Set To $MostFrequentUserUPN"
                     Write-Verbose "Successfully set Primary User $MostFrequentUserUPN for device $deviceName"
                 }
                 catch {
-                    & $addReport -Target $deviceName -OldValue $currentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "Error" -Details "$($_.Exception.Message)"
+                    & $addReport -Target $deviceName -OldValue $currentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "Failed" -Details "$($_.Exception.Message)"
                     Write-Warning "Failed to set Primary User $MostFrequentUserUPN for device $deviceName with error: $($_.Exception.Message)"
                 }
             } else {
@@ -1586,3 +1913,4 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
