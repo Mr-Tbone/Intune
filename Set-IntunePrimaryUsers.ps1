@@ -19,7 +19,7 @@
     Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
 
 .VERSION
-    7.0.0
+    7.0.1
 .RELEASENOTES
     1.0 2023-02-14 Initial Build
     2.0 2021-03-01 Large update to use Graph batching and reduce runtime
@@ -64,6 +64,7 @@
     6.2 2512.1 - Added versions on functions to keep track of changes, aslo worked through declarations, comments and fixed minor bugs
     6.1.1 2025-12-22 Fixed a better connect with parameter check
     7.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
+    7.0.1 2026-01-07 Fixed missing variable
 #>
 
 #region ---------------------------------------------------[Set Script Requirements]-----------------------------------------------
@@ -227,6 +228,9 @@ if (-not (Get-Module -Name $moduleName)) {
 [scriptblock]$addReport = {param($Target,$OldValue,$NewValue,$Action,$Details)
     if(-not $ReportResults.ContainsKey($Action)){$ReportResults[$Action]=[System.Collections.ArrayList]::new()}
     $null=$ReportResults[$Action].Add([PSCustomObject]@{Target=$Target;OldValue=$OldValue;NewValue=$NewValue;Action=$Action;Details=$Details})}
+
+# Data collection variables - initialized dynamically during script execution
+[datetime]$SignInsStartTime = (Get-Date).AddDays(-$SigninsTimeSpan) # Sign-in logs start time    
 #endregion
 
 #region ---------------------------------------------------[Functions]------------------------------------------------------------
@@ -1913,4 +1917,5 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
