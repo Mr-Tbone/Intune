@@ -41,12 +41,14 @@ function Invoke-TboneTinyLog {
 <#
 .SYNOPSIS
     Unified tiny logger for PS4-PS7, overrides Write-* commands and captures all messages
+.DESCRIPTION
+    Captures all Write-Host, Write-Output, Write-Warning, Write-Error and Write-Verbose messages in memory.
+    On 'Stop' mode, restores original Write-* commands and returns an array of all captured log messages.
 .NOTES
-    Please feel free to use this, but make sure to credit @MrTbone_se as the original author
-
-.LINK
-    https://tbone.se
-
+    Version: 1.0.0
+    Author:  @MrTbone_se (T-bone Granheden)
+    Releasenotes:
+        2026-01-08 - Initial release
 #>
   param(
     [ValidateSet('Start','Stop')][string]$Mode='Start',
@@ -72,6 +74,8 @@ function Test-SecureBootEnabled {
 <#
 .SYNOPSIS
     Test if Secure Boot is enabled, returns $true or $false
+.DESCRIPTION
+    Test if Secure Boot is enabled on the device using Confirm-SecureBootUEFI cmdlet.
 .NOTES
     Version: 1.0.0
     Author:  @MrTbone_se (T-bone Granheden)
