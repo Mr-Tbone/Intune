@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        4.0.1
+.VERSION        4.0.2
 .GUID           feedbeef-beef-4dad-beef-000000000003
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -12,6 +12,7 @@
     3.0 2025-12-19 Added versions on functions to keep track of changes, changed name to Add-IntuneScopeTagsBasedOnPrimaryUser, comments and fixed minor bugs
     4.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
     4.0.1 2026-01-09 Fixed Header and renamed script for clarity
+    4.0.2 2026-01-09 Fixed an unused variable
 #>
 
 <#
@@ -1659,7 +1660,6 @@ try {
             & $addReport -Target $deviceName -OldValue 'No.CurrentPrimaryUser' -NewValue 'N/A' -Action 'Skipped-NoPrimaryUser' -Details 'Missing Current Primary User'
             continue
         }
-        $currentPrimaryUserUPN = $currentPrimaryUser.userPrincipalName
 
         # Get mapping attribute value, if missing early exit
         $mappingAttributeValue = $currentPrimaryUser.$MappingAttribute
@@ -1829,5 +1829,6 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
 
