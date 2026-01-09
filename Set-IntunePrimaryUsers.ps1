@@ -41,11 +41,11 @@
 
 .EXAMPLE
     .\Set-IntunePrimaryUsers.ps1
-    Sets primary user for Windows devices with default settings.
+    Sets primary user for all Intune devices with default settings.
 
 .EXAMPLE
     .\Set-IntunePrimaryUsers.ps1 -OperatingSystems All -ReportDetailed $true -ReportToDisk $true
-    Sets primary user for all devices and saves detailed report to disk.
+    Sets primary user for all Intune devices and saves detailed report to disk.
 
 .EXAMPLE
     .\Set-IntunePrimaryUsers.ps1 -OperatingSystems Windows -SignInsTimeSpan 7 -DeviceTimeSpan 7
@@ -1904,6 +1904,7 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
 
 
