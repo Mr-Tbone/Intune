@@ -63,15 +63,15 @@ function Invoke-TboneTinyLog {
         function global:Write-Error {$m = $args -join ' ';if ($m) {$script:_l.Add("[ERR]$m");Microsoft.PowerShell.Utility\Write-Host "[ERR]$m" -ForegroundColor Red}}
         function global:Write-Verbose {$m = $args -join ' ';if ($m) {$script:_l.Add("[VERBOSE]$m");if ($VerbosePreference -ne 'SilentlyContinue') {Microsoft.PowerShell.Utility\Write-Host "[VERBOSE]$m" -ForegroundColor Cyan}}}    }
   } else {
-    'Write-Host','Write-Output','Write-Warning','Write-Error','Write-Verbose'|%{Remove-Item "function:$_" -ea 0}
+    'Write-Host','Write-Output','Write-Warning','Write-Error','Write-Verbose'|ForEach-Object{Remove-Item "function:$_" -ea 0}
     if ($script:_l) {try{[System.IO.File]::WriteAllLines("$($LogPath)\$($Name).log",$script:_l)}catch{};,$script:_l.ToArray();$script:_l=$null} else {@()}
   }
 }
 
-function Detect-SecureBootEnabled {
+function Test-SecureBootEnabled {
 <#
 .SYNOPSIS
-    Detect if Secure Boot is enabled, returns $true or $false
+    Test if Secure Boot is enabled, returns $true or $false
 .NOTES
     Version: 1.0.0
     Author:  @MrTbone_se (T-bone Granheden)
@@ -148,7 +148,7 @@ try {
     if ($isElevated) {
 
         # Check if Secure Boot is enabled
-        $SecureBootEnabled = Detect-SecureBootEnabled
+        $SecureBootEnabled = Test-SecureBootEnabled
         $Summary['SecureBoot'] = if ($SecureBootEnabled) { "Enabled" } else { "Disabled" }
         Write-Host "SecureBoot=$($Summary['SecureBoot'])"
         if (!$SecureBootEnabled) { $AllCompliant = $false }
