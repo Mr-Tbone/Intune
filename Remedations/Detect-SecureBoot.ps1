@@ -9,6 +9,7 @@
 .RELEASENOTES
     1.0.0 2026-01-08 Initial Build
 <#
+    1.0.1 2026-01-09 Fixed releasenotes
 .SYNOPSIS
     Script for Intune remediation to detect if Secure Boot is enabled
 
@@ -39,10 +40,11 @@ function Invoke-TboneTinyLog {
 .SYNOPSIS
     Unified tiny logger for PS4-PS7, overrides Write-* commands and captures all messages
 .NOTES
-    Version: 1.0.0
-    Author:  @MrTbone_se (T-bone Granheden)
-    Releasenotes:
-        2026-01-08 - Initial release
+    Please feel free to use this, but make sure to credit @MrTbone_se as the original author
+
+.LINK
+    https://tbone.se
+
 #>
   param(
     [ValidateSet('Start','Stop')][string]$Mode='Start',
@@ -169,3 +171,4 @@ finally {
     Exit ([int](-not $AllCompliant))
 }
 #endregion
+
