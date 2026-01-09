@@ -24,16 +24,17 @@
     The script uses Ms Graph and only requires the Microsoft.Graph.Authentication module
 
 .EXAMPLE
-   .\Add-DeviceToGroupBasedOnPrimaryUser.ps1
+   .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1
     Will add devices to groups based on primary user attributes with default settings
 
 .EXAMPLE
-    .\Add-DeviceToGroupBasedOnPrimaryUser.ps1 -OperatingSystems All -DetailedReport $true -ReportToDisk $true -ReportPath "C:\Reports"
+    .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1 -OperatingSystems All -DetailedReport $true -ReportToDisk $true -ReportPath "C:\Reports"
     Will add devices to groups based on primary user attributes for all devices and return a detailed report to disk.
 
 .EXAMPLE
-    .\Add-DeviceToGroupBasedOnPrimaryUser.ps1 -OperatingSystems Windows -MappingAttribute "Country"
+    .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1 -OperatingSystems Windows -MappingAttribute "Country"
     Will add devices to groups based on primary user attribute "country" for Windows devices.
+    
 .NOTES
     Please feel free to use this, but make sure to credit @MrTbone_se as the original author
 

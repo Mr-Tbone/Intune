@@ -1,4 +1,20 @@
 <#PSScriptInfo
+.VERSION        4.0.1
+.GUID           feedbeef-beef-4dad-beef-000000000003
+.AUTHOR         @MrTbone_se (T-bone Granheden)
+.COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
+.TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
+.LICENSEURI     https://opensource.org/licenses/MIT
+.PROJECTURI     https://github.com/Mr-Tbone/Intune
+.RELEASENOTES
+    1.0 2025-03-19 Initial Build
+    2.0 2025-11-14 Large update to use Graph batching and reduce runtime
+    3.0 2025-12-19 Added versions on functions to keep track of changes, changed name to Add-IntuneScopeTagsBasedOnPrimaryUser, comments and fixed minor bugs
+    4.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
+    4.0.1 2026-01-09 Fixed Header and renamed script for clarity
+#>
+
+<#
 .SYNOPSIS
     Script for Intune to set Scope Tags on Device based on Primary Users and their attributes
 
@@ -16,38 +32,15 @@
     .\Add-IntuneScopeTagsBasedOnPrimaryUser.ps1 -MappingAttribute country -OperatingSystems All -ReportDetailed $true -ReportToDisk $true -ReportToDiskPath "C:\Reports"
     Will set the scope tags on devices in Intune based on primary users and their attribute country for all devices and return a detailed report to disk
 
+.EXAMPLE
+    .\Add-IntuneScopeTagsBasedOnPrimaryUser.ps1 -OperatingSystems Windows -MappingAttribute "Country"
+    Will set the scope tags on devices in Intune based on primary user attribute "country" for Windows devices.
+
 .NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
+    Please feel free to use this, but make sure to credit @MrTbone_se as the original author
 
-.VERSION
-    4.0.0
-.RELEASENOTES
-    1.0 2025-03-19 Initial Build
-    2.0 2025-11-14 Large update to use Graph batching and reduce runtime
-    3.0 2025-12-19 Added versions on functions to keep track of changes, changed name to Add-IntuneScopeTagsBasedOnPrimaryUser, comments and fixed minor bugs
-    4.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
-.AUTHOR
-    Tbone Granheden
-    @MrTbone_se
-
-.COMPANYNAME
-    Coligo AB
-
-.GUID
-    00000000-0000-0000-0000-000000000000
-
-.COPYRIGHT
-    Feel free to use this, But would be grateful if My name is mentioned in Notes
-
-.CHANGELOG
-    1.0.2503.1 - Initial Version
-    2.0.2511.1 - Large update to use Graph batching and reduce runtime
-    2.0.2511.2 - Added parameter to include co-managed devices or only Intune managed devices
-    2.0.2511.3 - Added missing permission to required scopes "DeviceManagementRBAC.Read.All"
-    2.0.2512.1 - Added Certificate based auth and app based auth support in Invoke-ConnectMgGraph function
-    3.0.2512.1 - Added versions on functions to keep track of changes, changed name to Add-IntuneScopeTagsBasedOnPrimaryUser, comments and fixed minor bugs
-    3.0.1 2025-12-22 Fixed a better connect with parameter check
-    4.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
+.LINK
+    https://tbone.se
 #>
 
 #region ---------------------------------------------------[Set Script Requirements]-----------------------------------------------
@@ -221,16 +214,14 @@ function Invoke-ConnectMgGraph {
 .SYNOPSIS
     Connects to Microsoft Graph API with multiple authentication methods.
 .DESCRIPTION
-    Supports Managed Identity, Interactive, Client Secret, and Certificate authentication. Automatically detects the method from provided parameters and environment. 
-    Validates required scopes for Interactive authentication and reuses an existing connection when possible.
-    Add parameters for RequiredScope, ClientId, TenantId, ClientSecret, CertificateThumbprint, CertificateName, CertificatePath, and CertificatePassword in main script as needed.
+    Supports Managed Identity, Interactive, Client Secret, and Certificate authentication...
 .NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
-.VERSION
-    2.0
-.RELEASENOTES
-    1.0 Initial version
-    2.0 Change parameter names and fixed minor bugs on certificate authentication
+    Author:  @MrTbone_se (T-bone Granheden)
+    Version: 2.0
+    
+    Version History:
+    1.0 - Initial version
+    2.0 - 2026-01-09 - Changed parameter names and fixed minor bugs on certificate authentication
 #>
     [CmdletBinding()]
     param (
@@ -482,11 +473,11 @@ function Invoke-TboneLog {
     Write-Warning, and Write-Error calls. Stores messages in memory with timestamps and can optionally output to:
     -LogToGUI - Console (real-time during execution) -LogToDisk - Disk (log file at script completion) -LogToEventlog - Windows Event Log (Application log)
 .NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
-.VERSION
-    1.0
-.RELEASENOTES
-    1.0 Initial version
+    Author:  @MrTbone_se (T-bone Granheden)
+    Version: 1.0
+    
+    Version History:
+    1.0 - Initial version
 #>
     [CmdletBinding()]
     param(
@@ -542,13 +533,13 @@ function Invoke-MgGraphRequestSingle {
     Makes Graph API calls using Invoke-MgGraphRequest but add automatic pagination, throttling handling, and exponential backoff retry logic.
     Supports filtering, property selection, and count queries. Returns all pages of results automatically.
 .NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
-.VERSION
-    2.1
-.RELEASENOTES
-    1.0 Initial version
-    2.0 Fixed some small bugs with throttling handling
-    2.1 Added more error handling for Post/Patch methods
+    Author:  @MrTbone_se (T-bone Granheden)
+    Version: 2.1
+    
+    Version History:
+    1.0 - Initial version
+    2.0 - Fixed some small bugs with throttling handling
+    2.1 - Added more error handling for Post/Patch methods
 #>
 [CmdletBinding()]
     Param(
@@ -811,22 +802,20 @@ function Invoke-MgGraphRequestSingle {
 function invoke-mgGraphRequestBatch {
 <#
 .SYNOPSIS
-        Processes multiple Graph API requests in batches for improved performance.
-
+    Processes multiple Graph API requests in batches for improved performance.
 .DESCRIPTION
-        Sends Graph API requests in batches (up to 20 per batch) to efficiently process large numbers of objects.
-        Handles throttling, retries, and provides progress tracking. Supports GET, PATCH, POST, and DELETE operations.
+    Sends Graph API requests in batches (up to 20 per batch) to efficiently process large numbers of objects.
+    Handles throttling, retries, and provides progress tracking. Supports GET, PATCH, POST, and DELETE operations.
 .NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
-.VERSION
-    1.2
-.RELEASENOTES
-    1.0 Initial version
-    1.1 Added version on function to keep track of changes, minor bug fixes
-    1.2 Added more error handling for Post/Patch methods
-    1.3 Added a new parameter GraphNoObjectIdInUrl to allow requests where objectId should not be appended to the URL
+    Author:  @MrTbone_se (T-bone Granheden)
+    Version: 1.3
+    
+    Version History:
+    1.0 - Initial version
+    1.1 - Added version on function to keep track of changes, minor bug fixes
+    1.2 - Added more error handling for Post/Patch methods
+    1.3 - Added a new parameter GraphNoObjectIdInUrl to allow requests where objectId should not be appended to the URL
 #>
-    #>
     [CmdletBinding()]
     Param(
         [Parameter(
@@ -1134,13 +1123,13 @@ function Convert-PSObjectArrayToHashTables {
     Creates Generic.Dictionary hashtables from PSObject arrays using specified properties as keys.
     Returns single or multiple hashtables indexed by property values for efficient data retrieval.
 .NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
-.VERSION
-    1.2
-.RELEASENOTES
-    1.0 Initial version
-    1.1 Removed pipeline support, optimized property checks, added capacity pre-allocation
-    1.2 Added StringComparer.OrdinalIgnoreCase for correct UPN/ID lookups and improved error handling
+    Author:  @MrTbone_se (T-bone Granheden)
+    Version: 1.2
+    
+    Version History:
+    1.0 - Initial version
+    1.1 - Removed pipeline support, optimized property checks, added capacity pre-allocation
+    1.2 - Added StringComparer.OrdinalIgnoreCase for correct UPN/ID lookups and improved error handling
 #>
     [CmdletBinding()]
     param (
@@ -1277,12 +1266,12 @@ function Invoke-ScriptReport {
     Then use this to log report actions during processing:
         & $addReport -Target "Device001" -OldValue "Enabled" -NewValue "Disabled" -Action "Disabled" -Details "Optional info"
 .NOTES
-    Written by Mr T-Bone - @MrTbone_se - Feel free to use this, But would be grateful if My name is mentioned in Notes
-.VERSION
-    2.0
-.RELEASENOTES
-    1.0 Initial version
-    2.0 Added dynamic reporting object with dynamic action counters
+    Author:  @MrTbone_se (T-bone Granheden)
+    Version: 2.0
+    
+    Version History:
+    1.0 - Initial version
+    2.0 - Added dynamic reporting object with dynamic action counters
 #>
     [CmdletBinding()]
     param(
@@ -1840,4 +1829,5 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
