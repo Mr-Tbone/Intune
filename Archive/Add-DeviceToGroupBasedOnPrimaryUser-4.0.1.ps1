@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        4.0.2
+.VERSION        4.0.1
 .GUID           feedbeef-beef-4dad-beef-000000000002
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -11,7 +11,6 @@
     2.0 2021-03-01 Large update to use Graph batching and reduce runtime
     3.0 2025-12-20 Large update to allign with other Intune scripts in same suite
     4.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
-    4.0.2 2026-01-09 Fixed header to comply with best practice
 #>
 
 <#
@@ -1935,4 +1934,3 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
-
