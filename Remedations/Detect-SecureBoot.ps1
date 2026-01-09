@@ -8,9 +8,11 @@
 .PROJECTURI     https://github.com/Mr-Tbone/Intune
 .RELEASENOTES
     1.0.0 2026-01-08 Initial Build
+    1.0.1 2026-01-09 Fixed header to comply with best practice
+#>
+
 <#
-    1.0.1 2026-01-09 Fixed releasenotes
-.SYNOPSIS
+    .SYNOPSIS
     Script for Intune remediation to detect if Secure Boot is enabled
 
 .DESCRIPTION
@@ -171,4 +173,5 @@ finally {
     Exit ([int](-not $AllCompliant))
 }
 #endregion
+
 
