@@ -151,7 +151,7 @@ function Remediate-RegValue {
             New-Item -Path $S.Path -Force -ErrorAction Stop | Out-Null
             Write-Host "[NEW]Created path $($S.Path)"
         }
-        $existingValue = Get-ItemProperty -Path $S.Path -Name $S.Key -EA SilentlyContinue | Select -Exp $S.Key -EA SilentlyContinue
+        $existingValue = Get-ItemProperty -Path $S.Path -Name $S.Key -EA SilentlyContinue | Select-object -Exp $S.Key -EA SilentlyContinue
         if ($null -eq $existingValue) {
             Write-Host "[NEW]Creating key $($S.Key)"
         }
