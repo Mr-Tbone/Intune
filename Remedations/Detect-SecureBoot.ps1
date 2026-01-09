@@ -1,12 +1,11 @@
 <#PSScriptInfo
 .VERSION        1.0.1
-.PROJECTURI     https://github.com/Mr-Tbone/Intune
-.LICENSEURI     https://opensource.org/licenses/MIT
-.TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
-.COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
+.GUID           feedbeef-beef-4dad-beef-88c9893120b1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
-.GUID           
-feedbeef-beef-4dad-beef-88c9893120b1
+.COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
+.TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
+.LICENSEURI     https://opensource.org/licenses/MIT
+.PROJECTURI     https://github.com/Mr-Tbone/Intune
 
 <#
 .SYNOPSIS
