@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        1.0.2
+.VERSION        1.0.1
 .GUID           feedbeef-beef-4dad-beef-88c9893120b1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -9,7 +9,6 @@
 .RELEASENOTES
     1.0.0 2026-01-08 Initial Build
     1.0.1 2026-01-09 Fixed header to comply with best practice
-    1.0.2 2026-01-09 Patch Remediate Secure Boot Certificates
 #>
 
 <#
