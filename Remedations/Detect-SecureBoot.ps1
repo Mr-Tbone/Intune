@@ -12,7 +12,7 @@
 #>
 
 <#
-    .SYNOPSIS
+.SYNOPSIS
     Script for Intune remediation to detect if Secure Boot is enabled
 
 .DESCRIPTION
