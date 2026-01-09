@@ -343,9 +343,6 @@ try {
                 }
             }
         }
-        # Build and output compliance summary
-        $ComplianceSummary = ($Summary.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ';'
-        Write-Host "[SUMMARY]$ComplianceSummary"
     }
     else { Write-Error "Not running as SYSTEM or Admin"; $AllCompliant = $false }
 }
@@ -370,4 +367,3 @@ finally {
     }
 }
 #endregion
-
