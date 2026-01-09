@@ -52,7 +52,6 @@ $registrySettingsRemediate = @(
 #region ---------------------------------------------------[Set global script settings]--------------------------------------------
 $RemediateMode  = $MyInvocation.ScriptName -like "*Remediate*"              # Auto-detect mode based on script name
 $AllCompliant   = $true                                                     # Assume compliant until a check fails
-$Summary        = [ordered]@{}                                              # Summary hashtable for last reporting string to Intune
 #endregion
 #region ---------------------------------------------------[Functions]------------------------------------------------------------
 function Invoke-TboneTinyLog {
@@ -241,7 +240,6 @@ try {
 
         # Check if Secure Boot is enabled (If not, it cannot be remediated - skip remaining checks)
         $SecureBootEnabled = Detect-SecureBootEnabled
-        $Summary['SecureBoot'] = if ($SecureBootEnabled) { "Enabled" } else { "Disabled" }
         if (!$SecureBootEnabled) { 
             Write-Warning "Secure Boot is disabled - cannot proceed with CA 2023 update"
             $AllCompliant = $false 
@@ -254,90 +252,50 @@ try {
             # Determine state based on registry key value in UEFICA2023Status
             switch ($statusValue) {
                 "Updated" {
-                    # Check if Capable value is also correct (should be 2)
                     if ($capableValue -eq 2) {
                         # EARLY EXIT - Update is complete
-                        Write-Host "Secure Boot CA 2023 update is complete (Status=Updated, Capable=2)"
-                        $Summary['UEFICA2023Status'] = "Updated"
-                        $Summary['WindowsUEFICA2023Capable'] = "2-Complete"
+                        Write-Host "Secure Boot CA 2023 update complete (Status=Updated, Capable=2)"
                     } else {
                         # Status says Updated but Capable is not 2 - unusual state
-                        Write-Warning "UEFICA2023Status=Updated but WindowsUEFICA2023Capable=$capableValue (expected 2)"
-                        $Summary['UEFICA2023Status'] = "Updated-CapableMismatch"
-                        $Summary['WindowsUEFICA2023Capable'] = $capableValue
+                        Write-Warning "UEFICA2023Status=Updated but Capable=$capableValue (expected 2)"
                         $AllCompliant = $false
                     }
                 }
                 "Staged" {
-                    # Update is staged, pending reboot to complete UEFI update
-                    # Report as COMPLIANT - remediation worked, just waiting for user to reboot
-                    Write-Host "UEFICA2023Status=Staged - update is staged, pending reboot (Compliant)"
-                    $Summary['UEFICA2023Status'] = "Staged-PendingReboot"
-                    $Summary['WindowsUEFICA2023Capable'] = $capableValue
-                    # AllCompliant stays $true - trigger is set, just needs reboot
+                    # Update is staged, pending reboot - report COMPLIANT
+                    Write-Host "UEFICA2023Status=Staged - pending reboot (Compliant)"
                 }
                 "Failed" {
                     # Update failed - get error details
-                    Write-Error "UEFICA2023Status=Failed - Secure Boot CA 2023 update failed!"
-                    $Summary['UEFICA2023Status'] = "Failed"
-                    $Summary['WindowsUEFICA2023Capable'] = $capableValue
-                    
-                    # Read error details from registry
                     $errorCode = Read-RegValue -Path $registryKeysStatus[2].Path -Key $registryKeysStatus[2].Key
                     $errorEvent = Read-RegValue -Path $registryKeysStatus[3].Path -Key $registryKeysStatus[3].Key
-                    $Summary['UEFICA2023Error'] = if ($null -ne $errorCode) { "0x$([Convert]::ToString($errorCode, 16))" } else { "NotPresent" }
-                    $Summary['UEFICA2023ErrorEvent'] = if ($null -ne $errorEvent) { $errorEvent } else { "NotPresent" }
-                    Write-Error "Error code: $($Summary['UEFICA2023Error']), Event ID: $($Summary['UEFICA2023ErrorEvent'])"
-                    
-                    # Cannot remediate a failed update - need manual intervention
+                    $errHex = if ($null -ne $errorCode) { "0x$([Convert]::ToString($errorCode, 16))" } else { "N/A" }
+                    Write-Error "UEFICA2023Status=Failed! Error=$errHex, EventID=$errorEvent"
                     $AllCompliant = $false
                 }
                 default {
-                    # Status not set or unknown - update not started or in progress
-                    Write-Host "UEFICA2023Status=$statusValue - update not complete"
-                    $Summary['UEFICA2023Status'] = if ($statusValue) { $statusValue } else { "NotSet" }
-                    
-                    # Check AvailableUpdates trigger status FIRST (determines what other checks are needed)
+                    # Status not set or unknown - check trigger
                     $currentValue = Read-RegValue -Path $registryKeysStatus[4].Path -Key $registryKeysStatus[4].Key
                     $triggerBit = $registrySettingsRemediate[0].Value
                     $alreadyTriggered = ($null -ne $currentValue) -and (([int]$currentValue -band $triggerBit) -eq $triggerBit)
                     
                     if ($alreadyTriggered) {
-                        # Trigger already set - just waiting for reboot
-                        # Report as COMPLIANT to prevent Intune from exhausting retry attempts
-                        Write-Host "[INFO]AvailableUpdates trigger already set (0x$([Convert]::ToString($currentValue, 16))) - pending reboot (Compliant)"
-                        $Summary['AvailableUpdates'] = "0x$([Convert]::ToString($currentValue, 16))-PendingReboot"
-                        $Summary['UEFICA2023Status'] = "PendingReboot"
-                        # AllCompliant stays $true - remediation is done, just needs reboot
+                        # Trigger already set - report COMPLIANT
+                        Write-Host "AvailableUpdates=0x$([Convert]::ToString($currentValue, 16)) - pending reboot (Compliant)"
                     }
                     elseif ($RemediateMode) {
-                        # Trigger not set - set it now
+                        # Set the trigger
                         foreach ($trigger in $registrySettingsRemediate) {
-                            Write-Host "[FIX]Setting $($trigger.Key) to trigger Secure Boot CA 2023 update..."
                             if (!(Remediate-RegValue -S $trigger)) { $AllCompliant = $false }
                         }
-                        Write-Host "[INFO]Reboot required to complete Secure Boot CA 2023 update"
-                        $Summary['AvailableUpdates'] = "0x200-JustSet"
-                        $Summary['UEFICA2023Status'] = "PendingReboot"
+                        Write-Host "Reboot required to complete Secure Boot CA 2023 update"
                     }
                     else {
-                        # Detect mode - trigger not set, gather diagnostic info and report non-compliant
-                        $Summary['AvailableUpdates'] = if ($currentValue) { "0x$([Convert]::ToString($currentValue, 16))" } else { "NotSet" }
-                        
-                        # Only run diagnostic checks when non-compliant (for troubleshooting)
-                        $KBResult = Detect-RequiredKB -KBs $requiredKBs
-                        $Summary['RequiredKB'] = if ($KBResult) { "Found" } else { "NotFound" }
-                        
-                        $SBCA2023 = Detect-SecureBootCA2023 
-                        $Summary['SBCA2023'] = $SBCA2023
-                        
-                        # Translate $capableValue (already read) to human-readable meaning
-                        $capableMeaning = switch ($capableValue) { 0 {"CA2023NOTInDB"} 1 {"CA2023InDB"} 2 {"Complete"} $null {"NotSet"} default {"Unknown"} }
-                        $Summary['WindowsUEFICA2023Capable'] = $capableMeaning
-                        
-                        $Event1808 = Detect-TPMEvent1808
-                        $Summary['Event1808'] = $Event1808
-                        
+                        # Detect mode - gather diagnostics and report non-compliant
+                        Write-Warning "UEFICA2023Status=$statusValue, AvailableUpdates=$currentValue - needs remediation"
+                        Detect-RequiredKB -KBs $requiredKBs | Out-Null
+                        Detect-SecureBootCA2023 | Out-Null
+                        Detect-TPMEvent1808 | Out-Null
                         $AllCompliant = $false
                     }
                 }
