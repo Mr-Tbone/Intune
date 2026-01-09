@@ -1,6 +1,4 @@
-# Remedations
-
-Collection of scripts
+# Collecions of @MrTbone_se Intune Remedation scripts
 
 ## Detect-SecureBoot.ps1
 Script for Intune remediation to detect if Secure Boot is enabled
