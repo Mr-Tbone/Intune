@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        7.0.27.0.1
+$17.0.2
 .GUID           feedbeef-beef-4dad-beef-000000000001
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -1904,6 +1904,7 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
 
 
