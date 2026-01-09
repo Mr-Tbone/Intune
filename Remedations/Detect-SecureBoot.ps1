@@ -92,10 +92,13 @@ function Get-SecureBootDiagnostics {
     <#
 .SYNOPSIS
     Gather diagnostic info to understand why Secure Boot may not be enabled
+.DESCRIPTION
+    Gathers info about firmware type, partition style, device model, BIOS version, TPM status and OS build.
+    Returns an ordered hashtable with the collected info.
 .NOTES
     Version: 1.0.0
     Author:  @MrTbone_se (T-bone Granheden)
-    Releasenotes:
+    Version History:
         2026-01-08 - Initial release
 #>
     $diag = [ordered]@{} #Initialize ordered dictionary
