@@ -6,7 +6,8 @@
 .TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
 .LICENSEURI     https://opensource.org/licenses/MIT
 .PROJECTURI     https://github.com/Mr-Tbone/Intune
-
+.RELEASENOTES
+    1.0.0 2026-01-08 Initial Build
 <#
 .SYNOPSIS
     Script for Intune remediation to detect if Secure Boot is enabled
