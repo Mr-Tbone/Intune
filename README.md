@@ -25,3 +25,10 @@ This script will get all devices and their current primary user and current scop
 Get all users and the significant attribute for scope tagging
 It will then set scope tags based on that attribute
 The script uses Ms Graph and only requires the Microsoft.Graph.Authentication module
+
+## [Set-EntraManagedIdentityPermissions.ps1](Set-EntraManagedIdentityPermissions.ps1)
+Script for Entra/Azure to add required Microsoft Graph API permissions to a Managed Identity
+
+### Description
+This script connects to Entra ID with the Microsoft Graph module
+Then assign the listed Microsoft Graph API permissions to the specified Managed Identity.
