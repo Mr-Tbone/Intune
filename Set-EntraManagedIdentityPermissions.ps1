@@ -8,7 +8,7 @@
 .PROJECTURI     https://github.com/Mr-Tbone/Intune
 .RELEASENOTES
     1.0 2025-03-19 Initial Build
-    2.0.0 2026-01-16 Major Archived old azuread module
+    2.0.0 2026-01-16 Major update with better error handling and reporting
 #>
 
 <#
@@ -216,6 +216,7 @@ finally {
 
 
 # Test change
+
 
 
 
