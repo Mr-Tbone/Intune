@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        7.0.2
+.VERSION        7.0.3
 .GUID           feedbeef-beef-4dad-beef-000000000001
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -28,6 +28,7 @@
     7.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
     7.0.1 2026-01-07 Fixed missing variable
     7.0.2 2026-01-09 Fixed header to comply with best practice
+    7.0.3 2026-01-19 Fixed small bugs and syntax errors
 #>
 
 <#
@@ -1371,11 +1372,11 @@ function Invoke-ScriptReport {
                     foreach ($action in $actionSummary.Keys) {
                         [int]$count = $actionSummary[$action]
                         [double]$percentage = [math]::Round(($count / $totalObjects) * 100, 1)
-                        Write-Output ("    {0,-30}: {1,6} ({2,5}%)" -f $action, $count, $percentage)
+                        Write-Output ("    {0,-30}: {1,6} ({2,5}%%)" -f $action, $count, $percentage)
                     }
                 } else {
                     foreach ($action in $actionSummary.Keys) {
-                        Write-Output ("    {0,-20}: {1,6} (  0.0%)" -f $action, $actionSummary[$action])
+                        Write-Output ("    {0,-20}: {1,6} (  0.0%%)" -f $action, $actionSummary[$action])
                     }
                 }
             }
@@ -1850,7 +1851,7 @@ try {
             if ($PSCmdlet.ShouldProcess("Device $deviceName", "Set Primary User To $MostFrequentUserUPN")) {
                 try {
                     # Attempt to set the primary user
-                    [string]$GraphBody = @{ "@odata.id" = "https://graph.microsoft.com/beta/users/$MostFrequentUserID" } | ConvertTo-Json -Depth $JsonDepth
+                    [string]$GraphBody = @{ "@odata.id" = "https://graph.microsoft.com/beta/users/$MostFrequentUserID" } | ConvertTo-Json
                     
                     Invoke-MgGraphRequestSingle `
                         -GraphRunProfile 'beta' `
@@ -1904,6 +1905,7 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
 
 

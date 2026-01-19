@@ -1,14 +1,13 @@
 # Intune
 Collection of my Intunescripts
 
-## Set-IntunePrimaryUsers.ps1
+## [Set-IntunePrimaryUsers.ps1](Set-IntunePrimaryUsers.ps1)
 Script for Intune to set Primary User on Device
 
 ### Description
 This script gets Entra Sign-in logs for Windows and application sign-ins,
 determines the most frequent user in the last 30 days, and sets them as Primary User.
 Uses Microsoft Graph and requires only the Microsoft.Graph.Authentication module.
-
 ## Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1
 Script for Intune to add device to a group based on primary user
 
@@ -32,3 +31,13 @@ Script for Entra/Azure to add required Microsoft Graph API permissions to a Mana
 ### Description
 This script connects to Entra ID with the Microsoft Graph module
 Then assign the listed Microsoft Graph API permissions to the specified Managed Identity.
+
+## [Intune - Drive Mapping.ps1](Intune - Drive Mapping.ps1)
+This script will map drives and printers for cloud native devices
+It can be used as both script and remediation script in Intune.
+I prefer to use it as a remediation script to be able to update with new versions.
+
+### Description
+This script connects to Azure AD with the old AzureAD module
+Then assign the listed Microsoft Graph API permissions to the specified Managed Identity.
+
