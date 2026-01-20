@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        1.0.4
+.VERSION        1.0.3
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-85924e86a608
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -11,7 +11,6 @@
     1.0.1 2026-01-09 Patch Remediate Secure Boot Certificates
     1.0.2 2026-01-09 fix redundant reg read
     1.0.3 2026-01-14 fix detection bugs
-    1.0.4 2026-01-20 Fixed a syntax error
 #>
 
 <#
@@ -309,4 +308,3 @@ finally {
     }
 }
 #endregion
-
