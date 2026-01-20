@@ -38,6 +38,18 @@ It can be used as both script and remediation script in Intune.
 I prefer to use it as a remediation script to be able to update with new versions.
 
 ### Description
-This script connects to Azure AD with the old AzureAD module
-Then assign the listed Microsoft Graph API permissions to the specified Managed Identity.
+This script maps network drives or printers for cloud-native (Entra ID joined) Windows devices.
+When run as SYSTEM (via Intune), it creates a scheduled task that runs as the logged-in user.
+The scheduled task executes on logon and network connection events to map drives/printers.
+Group memberships are queried via LDAP to determine which mappings apply to the user.
 
+## [Intune - Printer Mapping.ps1](Intune - Printer Mapping.ps1)
+This script will map drives and printers for cloud native devices
+It can be used as both script and remediation script in Intune.
+I prefer to use it as a remediation script to be able to update with new versions.
+
+### Description
+This script maps network drives or printers for cloud-native (Entra ID joined) Windows devices.
+When run as SYSTEM (via Intune), it creates a scheduled task that runs as the logged-in user.
+The scheduled task executes on logon and network connection events to map drives/printers.
+Group memberships are queried via LDAP to determine which mappings apply to the user.
