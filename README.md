@@ -1,6 +1,6 @@
 # Collection of Mr T-Bone´s Intune scripts
 
-## [Set-IntunePrimaryUsers.ps1](Set-IntunePrimaryUsers.ps1)
+## [Set-IntunePrimaryUsers.ps1](<Set-IntunePrimaryUsers.ps1>)
 Script for Intune to set Primary User on Device
 
 ### Description
@@ -14,7 +14,6 @@ Script for Intune to add device to a group based on primary user
 This script will get the All devices in Intune and their primary users.
 The script then use a given attribute from the primary user (like Country, City) to add the device to a group based on that value
 The script uses Ms Graph and only requires the Microsoft.Graph.Authentication module
-
 ## [Add-IntuneScopeTagsBasedOnPrimaryUser.ps1](<Add-IntuneScopeTagsBasedOnPrimaryUser.ps1>)
 Script for Intune to set Scope Tags on Device based on Primary Users and their attributes
 
@@ -23,7 +22,6 @@ This script will get all devices and their current primary user and current scop
 Get all users and the significant attribute for scope tagging
 It will then set scope tags based on that attribute
 The script uses Ms Graph and only requires the Microsoft.Graph.Authentication module
-
 ## [Set-EntraManagedIdentityPermissions.ps1](Set-EntraManagedIdentityPermissions.ps1)
 Script for Entra/Azure to add required Microsoft Graph API permissions to a Managed Identity
 
@@ -58,3 +56,6 @@ This script maps network drives or printers for cloud-native (Entra ID joined) W
 When run as SYSTEM (via Intune), it creates a scheduled task that runs as the logged-in user.
 The scheduled task executes on logon and network connection events to map drives/printers.
 Group memberships are queried via LDAP to determine which mappings apply to the user.
+
+
+

@@ -1,42 +1,57 @@
 <#PSScriptInfo
-.VERSION        4.1.0
-.GUID           feedbeef-beef-4dad-beef-000000000002
+.VERSION        7.0.3
+.GUID           feedbeef-beef-4dad-beef-000000000001
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
 .TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
 .LICENSEURI     https://opensource.org/licenses/MIT
 .PROJECTURI     https://github.com/Mr-Tbone/Intune
 .RELEASENOTES
-    1.0 2023-02-14 Initial Build
-    2.0 2021-03-01 Large update to use Graph batching and reduce runtime
-    3.0 2025-12-20 Large update to allign with other Intune scripts in same suite
-    4.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
-    4.0.2 2026-01-09 Fixed header to comply with best practice
-    4.0.3 2026-01-09 Fixed Header and renamed script for clarity
-    4.1.0 2026-01-21 Minor update to logging module and a lot of variable naming changes
+    1.0.2202.1 - Initial Version
+    2.0.2312.1 - Large update to use Graph batching and reduce runtime
+    3.0.2407.1 - Added support for Group filtering
+    3.0.2407.2 - Added a verification of required permissions
+    4.0.2503.1 - Added new functions and new structure for the script
+    5.0.2504.1 - Changed all requests to use invoke-mggraphrequets
+    5.0.2504.2 - Bug fixing and error and throttling handling
+    5.1.2504.3 - Changed sorting and selecting from the sign-in logs and overall performance improvements
+    6.0.2510.1 - A complete rewrite of the processes due to changes in Microsoft Graph, now 10x faster and more reliable 
+    6.0.2510.2 - Added T-Bone logging function throughout the script to better track execution and errors
+    6.0.2510.3 - Improved logic and performance of the user sign-in data processing
+    6.0.2510.4 - Added a fallback for windows devices with no Windows sign-in logs, to use application sign-in logs instead
+    6.0.2510.5 - New parameters for keep and replace accounts
+    6.0.2511.1 - New parameters for Intune only or both Intune and Co-managed 
+    6.1.2511.2 - Bug fixes with DeviceTimeSpan and changed the name of the script to Set-IntunePrimaryUsers.ps1
+    6.1.2512.1 - Added Certificate based auth and app based auth support in Invoke-ConnectMgGraph function
+    6.2 2512.1 - Added versions on functions to keep track of changes, aslo worked through declarations, comments and fixed minor bugs
+    6.1.1 2025-12-22 Fixed a better connect with parameter check
+    7.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
+    7.0.1 2026-01-07 Fixed missing variable
+    7.0.2 2026-01-09 Fixed header to comply with best practice
+    7.0.3 2026-01-19 Fixed small bugs and syntax errors
 #>
 
 <#
 .SYNOPSIS
-    Script for Intune to add device to a group based on primary user
+    Script for Intune to set Primary User on Device
 
 .DESCRIPTION
-    This script will get the All devices in Intune and their primary users.
-    The script then use a given attribute from the primary user (like Country, City) to add the device to a group based on that value
-    The script uses Ms Graph and only requires the Microsoft.Graph.Authentication module
+    This script gets Entra Sign-in logs for Windows and application sign-ins,
+    determines the most frequent user in the last 30 days, and sets them as Primary User.
+    Uses Microsoft Graph and requires only the Microsoft.Graph.Authentication module.
 
 .EXAMPLE
-   .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1
-    Will add devices to groups based on primary user attributes with default settings
+    .\Set-IntunePrimaryUsers.ps1
+    Sets primary user for all Intune devices with default settings.
 
 .EXAMPLE
-    .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1 -OperatingSystems All -DetailedReport $true -ReportToDisk $true -ReportPath "C:\Reports"
-    Will add devices to groups based on primary user attributes for all devices and return a detailed report to disk.
+    .\Set-IntunePrimaryUsers.ps1 -OperatingSystems All -ReportDetailed $true -ReportToDisk $true
+    Sets primary user for all Intune devices and saves detailed report to disk.
 
 .EXAMPLE
-    .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1 -OperatingSystems Windows -MappingAttribute "Country"
-    Will add devices to groups based on primary user attribute "country" for Windows devices.
-    
+    .\Set-IntunePrimaryUsers.ps1 -OperatingSystems Windows -SignInsTimeSpan 7 -DeviceTimeSpan 7
+    Sets primary user for Windows devices based on sign-ins and device activity in the last 7 days.
+
 .NOTES
     Please feel free to use this, but make sure to credit @MrTbone_se as the original author
 
@@ -54,15 +69,12 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory = $false,          HelpMessage = "Name of the script action for logging.")]
-    [string]$ScriptActionName       = "Intune add device to group based on primary user",
+    [string]$ScriptActionName       = "Set Intune Primary User",
 
     [Parameter(Mandatory = $false,          HelpMessage = "Device operatingsystems to process ('All', 'Windows', 'Android', 'iOS', 'macOS'). Default is 'Windows'")]
     [ValidateSet('All', 'Windows', 'Android', 'iOS', 'macOS')]
     [string[]]$OperatingSystems     = @('Windows'),
-
-    [Parameter(Mandatory = $false,          HelpMessage = "Attribute to use for the mapping. Default is 'Country'")]
-    [string]$MappingAttribute       = "Country",
-            
+        
     [Parameter(Mandatory = $false,          HelpMessage = "Filter Intune only managed devices (true) or also include Co-managed devices (false). Default is true")]
     [bool]$IntuneOnly               = $true,
 
@@ -71,7 +83,21 @@ param(
 
     [Parameter(Mandatory = $false,          HelpMessage = "Filter to exclude devicenames that starts with specific strings like ('Tbone', 'Desktop'). Default is blank")]
     [string[]]$ExcludedDeviceNames  = @(),
-    
+
+    [Parameter(Mandatory = $false,          HelpMessage = "Filter to exclude specific accounts as primary owners for example enrollment accounts ('wds@tbone.se','install@tbone.se'). Default is blank")]
+    [string[]]$ReplaceUserAccounts  = @(),
+
+    [Parameter(Mandatory = $false,          HelpMessage = "Filter to keep specific accounts that always should be keept as primary owners ('Monitoring@tbone.se'). Default is blank")]
+    [string[]]$KeepUserAccounts     = @(),
+
+    [Parameter(Mandatory = $false,          HelpMessage = "Time period in days to retrieve user sign-in activity logs. Default is 30 days")]
+    [ValidateRange(1,90)]
+    [int]$SignInsTimeSpan           = 30,
+
+    [Parameter(Mandatory = $false,          HelpMessage = "Time period in days to retrieve active devices. Default is 30 days")]
+    [ValidateRange(1,365)]
+    [int]$DeviceTimeSpan            = 30,
+
     [Parameter(Mandatory = $false,          HelpMessage = "Testmode, same as -WhatIf. Default is false")]
     [bool]$Testmode                 = $false,
 # ==========> Authentication (Invoke-ConnectMgGraph) Leave blank if use Interactive or Managed Identity <==============
@@ -147,33 +173,23 @@ param(
 
     [Parameter(Mandatory = $false,          HelpMessage = "Maximum number of retry attempts for failed requests. Default is 3")]
     [ValidateRange(1,10)]
-    [int]$GraphMaxRetry              = 3,
-
-    [Parameter(Mandatory = $false,          HelpMessage = "Maximum number of items to process in a single batch. Default is 20")]
-    [ValidateRange(1,20)]
-    [int]$GraphBatchSize             = 20
+    [int]$GraphMaxRetry              = 3
     )
 #endregion
 
 #region ---------------------------------------------------[Modifiable Variables and defaults]------------------------------------
-# Define User attribute to map by this table
-$MappingAttributeTable = @{  
-    'Sweden'            = 'Intune All Devices SE'
-    'Germany'           = 'Intune All Devices DE'
-    'France'            = 'Intune All Devices FR'
-    'Poland'            = 'Intune All Devices PL'
-    'United States'     = 'Intune All Devices US'
-    'China'             = 'Intune All Devices CN'
-    'Republic of Korea' = 'Intune All Devices KR'
-    'Japan'             = 'Intune All Devices JP'
-    'India'             = 'Intune All Devices IN'
-}
+# Application IDs for the search of sign-in logs on different OS
+[string]$AppId_Android           = '9ba1a5c7-f17a-4de9-a1f1-6178c8d51223'  # Microsoft Intune Company Portal
+[string]$AppId_iOS               = 'e8be65d6-d430-4289-a665-51bf2a194bda'  # Microsoft 365 App Catalog Services
+[string]$AppId_macOS             = '29d9ed98-a469-4536-ade2-f981bc1d605e'  # Microsoft Authentication Broker
+[string]$AppId_Windows           = '38aa3b87-a06d-4817-b275-7a316988d93b'  # Windows Sign In
+[string]$AppId_Windows_Fallback  = 'fc0f3af4-6835-4174-b806-f7db311fd2f3'  # Microsoft Intune Windows Agent. Fallback if no Windows Sign In logs are found
+
 # ==========> Authentication (Invoke-ConnectMgGraph) <=================================================================
 [System.Collections.ArrayList]$RequiredScopes = @(  # Required Graph API permission scopes used in function Invoke-ConnectMgGraph
-    "DeviceManagementManagedDevices.Read.All",      # Read Intune devices
-    "Device.Read.All",                              # Read Entra devices
-    "User.Read.All",                                # Read users
-    "GroupMember.ReadWrite.All"                     # Read groups, members, add/remove members
+    "DeviceManagementManagedDevices.ReadWrite.All", # Read/write Intune device to set Primary Users
+    "AuditLog.Read.All",                            # Read sign-in logs
+    "User.Read.All"                                 # Read users
 )
 #endregion
 
@@ -1495,12 +1511,20 @@ try {
         [string]$GraphFilterString = $null
         # Add filter for Operating Systems
         if ($OperatingSystems -notcontains 'All' -and $OperatingSystems.Count -gt 0) {
-            [array]$OsFilterParts = $OperatingSystems | ForEach-Object { "operatingSystem eq '$_'" }
+            [array]$OsFilterParts = @($OperatingSystems | ForEach-Object { "operatingSystem eq '$_'" })
             $GraphFilterString = "($($OsFilterParts -join ' or '))"
             Write-Verbose "Using OS filter: $GraphFilterString"
         }
         else {Write-Verbose "No OS filter applied (retrieving all operating systems)"}
-        # Add filter for Intune managed devices or also include co-managed environment
+        # Add filter for device last sync time
+        if ($DeviceTimeSpan -gt 0) { 
+            [string]$timeThreshold = (Get-Date).AddDays(-$DeviceTimeSpan).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            if ($GraphFilterString) {$GraphFilterString = "lastSyncDateTime ge $timeThreshold and " + $GraphFilterString
+            } else {$GraphFilterString = "lastSyncDateTime ge $timeThreshold"}
+            Write-Verbose "Using device last sync time filter: lastSyncDateTime ge $timeThreshold"
+        }
+        else {Write-Verbose "No device last sync time filter applied"}
+        # Add filter for Intune managed devices or also include co-managed devices
         if ($IntuneOnly) {
             if ($GraphFilterString) {$GraphFilterString = "managementAgent eq 'mdm' and " + $GraphFilterString}
             else {$GraphFilterString = "managementAgent eq 'mdm' "}
@@ -1515,7 +1539,8 @@ try {
             -GraphFilters $GraphFilterString `
             -GraphMaxRetry $GraphMaxRetry `
             -GraphWaitTime $GraphWaitTime
-
+        # Initialize hashtables
+        $AllDevicesByIdHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
         # Verify if objects were found   
         if ($AllDevices -and $AllDevices.Count -gt 0) {
             Write-Verbose "Retrieved $($AllDevices.Count) devices from Graph API"
@@ -1537,6 +1562,9 @@ try {
                 if ($ExcludePattern) { Write-Verbose "Applied exclusion filter for $($ExcludedDeviceNames.Count) patterns" }
                 Write-Verbose "Remaining after filters: $($AllDevices.Count) devices"
             }
+            # Create hashtable for fast lookups
+            $AllDevicesByIdHash = Convert-PSObjectArrayToHashTables -PSObjectArray $AllDevices -IdProperties @('id')
+            Write-Verbose "Created device lookup hashtable with $($AllDevicesByIdHash.Count) entries"
         }
         else {Write-Warning "No devices found in tenant"}
     }
@@ -1548,7 +1576,7 @@ try {
     # Get all users from Graph
     try {
         # List properties to retrieve
-        [string]$GraphProperties = "id,userPrincipalName,$($MappingAttribute)"
+        [string]$GraphProperties = 'id,userPrincipalName'
         # Prepare filters
         [string]$GraphFilterString = $null
         # Get graph objects with single call
@@ -1563,6 +1591,7 @@ try {
 
         # Initialize hashtables
         $AllUsersByIdHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
+        $AllUsersByUPNHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
         # Verify if objects were found
         if ($AllUsers -and $AllUsers.Count -gt 0) {
             Write-Verbose "Successfully retrieved $($AllUsers.Count) users from Graph API"
@@ -1579,355 +1608,290 @@ try {
         throw
     }
 
-    # Get Entra devices
+    # Get all sign-in logs from Graph in chunks per OS type
     try {
         # List properties to retrieve
-        [string]$GraphProperties = 'id,deviceId'
-        # Get graph objects with single call
-        $AllEntraDevices = Invoke-MgGraphRequestSingle `
-            -GraphRunProfile 'v1.0' `
-            -GraphMethod 'GET' `
-            -GraphObject 'devices' `
-            -GraphProperties $GraphProperties `
-            -GraphMaxRetry $GraphMaxRetry `
-            -GraphWaitTime $GraphWaitTime
-
-        # Initialize hashtable for deviceId to directory object id mapping
-        $EntraDeviceObjectIdByDeviceId = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        # Verify if objects were found
-        if ($AllEntraDevices -and $AllEntraDevices.Count -gt 0) {
-            Write-Verbose "Successfully retrieved $($AllEntraDevices.Count) Entra devices from Graph API"
-            # Create hashtable for fast lookups (deviceId -> directory object id)
-            foreach ($entraDevice in $AllEntraDevices) {
-                if ($entraDevice.deviceId -and $entraDevice.id) {
-                    $EntraDeviceObjectIdByDeviceId[$entraDevice.deviceId] = $entraDevice.id
-                }
-            }
-            Write-Verbose "Created Entra device lookup hashtable: $($EntraDeviceObjectIdByDeviceId.Count) entries"
+        [string]$GraphProperties = 'deviceDetail,userPrincipalName,userId'
+        # Prepare filters
+        [string]$GraphFilterString = "status/errorCode eq 0 and deviceDetail/isManaged eq true"
+        # Add filter for OS specific queries
+        [hashtable]$OsQueryConfigs = @{
+            'Android' = @{ AppId = $AppId_Android; EventType = "signInEventTypes/any(t: t eq 'nonInteractiveUser')"; OSFilter = "startsWith(deviceDetail/operatingSystem,'Android')" }
+            'iOS' = @{ AppId = $AppId_iOS; EventType = "signInEventTypes/any(t: t eq 'nonInteractiveUser')"; OSFilter = "startsWith(deviceDetail/operatingSystem,'iOS')" }
+            'macOS' = @{ AppId = $AppId_macOS; EventType = "signInEventTypes/any(t: t eq 'nonInteractiveUser')"; OSFilter = "startsWith(deviceDetail/operatingSystem,'MacOs')" }
+            'Windows' = @{ AppId = $AppId_Windows; EventType = "isInteractive eq true"; OSFilter = "startsWith(deviceDetail/operatingSystem,'Windows')" }
+            'Windows Fallback' = @{ AppId = $AppId_Windows_Fallback; EventType = "signInEventTypes/any(t: t eq 'nonInteractiveUser')"; OSFilter = "startsWith(deviceDetail/operatingSystem,'Windows')" }
         }
-        else {Write-Warning "No Entra devices found in tenant"}
-    }
-    catch {
-        Write-Error "Failed to get Entra devices: $($_.Exception.Message)"
-        throw
-    }
-
-    # Get the groups defined in mapping (supports both GUIDs and display names)
-    try {
-        # Extract unique group identifiers from the mapping
-        [array]$targetGroupIdentifiers = $MappingAttributeTable.Values | Select-Object -Unique
-        
-        # Initialize hashtables for group lookups
-        $AllGroupsByDisplayNameHash = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        $AllGroupsByIdHash = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        $GroupMembersByGroupIdHash = [System.Collections.Generic.Dictionary[string,System.Collections.Generic.HashSet[string]]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        [System.Collections.Generic.List[PSObject]]$AllGroups = [System.Collections.Generic.List[PSObject]]::new()
-        
-        if (-not $targetGroupIdentifiers -or $targetGroupIdentifiers.Count -eq 0) {
-            Write-Warning "No group identifiers found in MappingAttributeTable - skipping group retrieval"
-        }
-        else {
-            # Separate GUIDs from display names using regex pattern
-            [string]$GuidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-            [System.Collections.Generic.List[string]]$GroupGuids = [System.Collections.Generic.List[string]]::new()
-            [System.Collections.Generic.List[string]]$GroupNames = [System.Collections.Generic.List[string]]::new()
-            foreach ($identifier in $targetGroupIdentifiers) {
-                if ($identifier -match $GuidPattern) { $GroupGuids.Add($identifier) }
-                else { $GroupNames.Add($identifier) }
-            }
-            # List properties to retrieve
-            [string]$GraphProperties = "id,displayName"
-            Write-Verbose "MappingAttributeTable contains $($GroupGuids.Count) GUIDs and $($GroupNames.Count) display names"
-            $ProcessedGroupIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-            # Get groups by display name first
-            if ($GroupNames.Count -gt 0) {
-                Write-Verbose "Resolving $($GroupNames.Count) groups by display name"
-                # Prepare filters (chunked to avoid URL length limits)
-                [int]$FilterChunkSize = 10
-                for ([int]$i = 0; $i -lt $GroupNames.Count; $i += $FilterChunkSize) {
-                    [int]$EndIndex = [Math]::Min($i + $FilterChunkSize - 1, $GroupNames.Count - 1)
-                    [array]$Chunk = $GroupNames[$i..$EndIndex]
-                    [string]$GraphFilterString = ($Chunk | ForEach-Object { "displayName eq '$($_ -replace "'","''")'" }) -join ' or '
-                   
-                    Write-Verbose "Fetching groups chunk $([Math]::Floor($i / $FilterChunkSize) + 1) of $([Math]::Ceiling($GroupNames.Count / $FilterChunkSize)) ($($Chunk.Count) groups)"
-                    # Get graph objects
-                    $ChunkGroups = Invoke-MgGraphRequestSingle `
-                        -GraphRunProfile 'v1.0' `
-                        -GraphMethod 'GET' `
-                        -GraphObject 'groups' `
-                        -GraphProperties $GraphProperties `
-                        -GraphFilters $GraphFilterString `
-                        -GraphMaxRetry $GraphMaxRetry `
-                        -GraphWaitTime $GraphWaitTime
-                    
-                    if ($ChunkGroups -and $ChunkGroups.Count -gt 0) {
-                        foreach ($Grp in $ChunkGroups) {
-                            if ($ProcessedGroupIds.Add($Grp.id)) {
-                                $AllGroups.Add($Grp)
-                            }
-                        }
-                    }
-                }
-                Write-Verbose "Resolved $($AllGroups.Count) groups by display name"
-            }
-            
-            # Get Groups by GUIDs
-            if ($GroupGuids.Count -gt 0) {
-                # Filter out GUIDs already resolved from display names
-                [System.Collections.Generic.List[PSObject]]$GuidOnlyGroups = [System.Collections.Generic.List[PSObject]]::new()
-                foreach ($Guid in $GroupGuids) {
-                    if (-not $ProcessedGroupIds.Contains($Guid)) {
-                        $GuidOnlyGroups.Add([PSCustomObject]@{ id = $Guid })
-                    }
-                }
-                if ($GuidOnlyGroups.Count -gt 0) {
-                    Write-Verbose "Fetching details for $($GuidOnlyGroups.Count) groups by GUID"
-                    # Batch get graph objects
-                    $GroupDetailResults = Invoke-MgGraphRequestBatch `
-                        -GraphRunProfile 'v1.0' `
-                        -GraphMethod 'GET' `
-                        -GraphObject 'groups' `
-                        -GraphObjects $GuidOnlyGroups `
-                        -GraphQuery '' `
-                        -GraphProperties $GraphProperties `
-                        -GraphBatchSize $GraphBatchSize `
-                        -GraphWaitTime $GraphWaitTime `
-                        -GraphMaxRetry $GraphMaxRetry
-                    
-                    foreach ($Result in $GroupDetailResults) {
-                        if ($Result.id -and $Result.displayName) {
-                            if ($ProcessedGroupIds.Add($Result.id)) {
-                                $AllGroups.Add([PSCustomObject]@{ id = $Result.id; displayName = $Result.displayName })
-                            }
-                        }
-                    }
-                    Write-Verbose "Retrieved $($GuidOnlyGroups.Count) group details by GUID"
-                }
-            }
-            Write-Verbose "Total groups resolved: $($AllGroups.Count)"
-        }
-    }
-    catch {
-        Write-Error "Failed to get groups from mapping: $($_.Exception.Message)"
-        throw
-    }
-
-    # Get members for all mapped groups
-    foreach ($group in $AllGroups) {
-        # Build hashtables for fast lookups first
-        $AllGroupsByDisplayNameHash[$group.displayName] = $group
-        $AllGroupsByIdHash[$group.id] = $group
-        $GroupMembersByGroupIdHash[$group.id] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    }
-    if ($AllGroups -and $AllGroups.Count -gt 0) {
-        try {
-            Write-Verbose "Fetching members for $($AllGroups.Count) groups (with pagination support)"
-            # Get members for each group
-            foreach ($group in $AllGroups) {
-                # List properties to retrieve
-                [string]$GraphProperties = "id"
-                
-                [System.Collections.Generic.HashSet[string]]$memberSet = $GroupMembersByGroupIdHash[$group.id]
-                [int]$memberCount = 0
-                # Get graph objects
-                $groupMembers = Invoke-MgGraphRequestSingle `
-                    -GraphRunProfile 'v1.0' `
-                    -GraphMethod 'GET' `
-                    -GraphObject "groups/$($group.id)/members" `
-                    -GraphProperties $GraphProperties `
-                    -GraphMaxRetry $GraphMaxRetry `
-                    -GraphWaitTime $GraphWaitTime
-                
-                if ($groupMembers -and $groupMembers.Count -gt 0) {
-                    foreach ($member in $groupMembers) {
-                        if ($member.id) {
-                            [void]$memberSet.Add($member.id)
-                            $memberCount++
-                        }
-                    }
-                }
-                Write-Verbose "Group '$($group.displayName)': $memberCount members"
-            }
-            
-            # Log total members across all groups
-            [int]$totalMembers = 0
-            foreach ($kvp in $GroupMembersByGroupIdHash.GetEnumerator()) {
-                $totalMembers += $kvp.Value.Count
-            }
-            Write-Verbose "Created group lookup hashtables: DisplayName=$($AllGroupsByDisplayNameHash.Count), Id=$($AllGroupsByIdHash.Count), TotalMembers=$totalMembers"
-        }
-        catch {
-            Write-Error "Failed to get group members: $($_.Exception.Message)"
-            throw
-        }
-    }
-    else {
-        Write-Warning "No groups matching the mapping were found in tenant - skipping member retrieval"
-    }
-
-    # Process each device and determine group membership changes
-    [System.Collections.Generic.List[PSObject]]$DevicesToAddToGroups = [System.Collections.Generic.List[PSObject]]::new()
-    [System.Collections.Generic.List[PSObject]]$DevicesToRemoveFromGroups = [System.Collections.Generic.List[PSObject]]::new()
-    $DeviceState = [System.Collections.Generic.Dictionary[string,hashtable]]::new([StringComparer]::OrdinalIgnoreCase)
-    
-    foreach ($Device in $AllDevices) {
-        $DeviceName = $Device.DeviceName
-        $DeviceAzureAdId = $Device.azureADDeviceId
-        $DeviceDirectoryObjectId = $null
-
-        # Validate Entra ID on device, if missing early exit
-        if ([string]::IsNullOrWhiteSpace($DeviceAzureAdId) -or $DeviceAzureAdId -eq '00000000-0000-0000-0000-000000000000') {
-            & $AddReport -Target $DeviceName -OldValue 'No.EntraIdOnDevice' -NewValue 'N/A' -Action 'Skipped-EntraIdOnDevice' -Details 'Missing Entra ID on Device In Intune'
-            continue
-        }
-        # Resolve Entra device object id from deviceId, if missing early exit
-        if (-not $EntraDeviceObjectIdByDeviceId.TryGetValue($DeviceAzureAdId, [ref]$DeviceDirectoryObjectId)) {
-            & $AddReport -Target $DeviceName -OldValue 'No.EntraDevice' -NewValue 'N/A' -Action 'Skipped-EntraDeviceNotFound' -Details 'Could not resolve Entra device object id from deviceId'
-            continue
-        }
-        # Get current Primary User, if missing early exit
-        $CurrentPrimaryUser = $null
-        if (-not ($Device.userId -and $AllUsersByIdHash.TryGetValue($Device.userId, [ref]$CurrentPrimaryUser))) {
-            & $AddReport -Target $DeviceName -OldValue 'No.CurrentPrimaryUser' -NewValue 'N/A' -Action 'Skipped-NoPrimaryUser' -Details 'Missing Current Primary User'
-            continue
-        }
-        # Get mapping attribute value, if missing early exit
-        $MappingAttributeValue = $CurrentPrimaryUser.$MappingAttribute
-        if ([string]::IsNullOrWhiteSpace($MappingAttributeValue)) {
-            & $AddReport -Target $DeviceName -OldValue 'N/A' -NewValue 'N/A' -Action 'Skipped-NoAttribute' -Details "Primary user missing $MappingAttribute"
-            continue
-        }
-        # Check if mapping exists, if missing early exit
-        if (-not $MappingAttributeTable.ContainsKey($MappingAttributeValue)) {
-            & $AddReport -Target $DeviceName -OldValue $MappingAttributeValue -NewValue 'N/A' -Action 'Skipped-NoMapping' -Details 'No Group Mapping Found'
-            continue
-        }
-        # Get target group from mapping, if missing early exit
-        $TargetGroupIdentifier = $MappingAttributeTable[$MappingAttributeValue]
-        $TargetGroup = $null
-        if (-not $AllGroupsByIdHash.TryGetValue($TargetGroupIdentifier, [ref]$TargetGroup) -and 
-            -not $AllGroupsByDisplayNameHash.TryGetValue($TargetGroupIdentifier, [ref]$TargetGroup)) {
-            & $AddReport -Target $DeviceName -OldValue $MappingAttributeValue -NewValue $TargetGroupIdentifier -Action 'Skipped-GroupNotFound' -Details 'Target group not found in tenant'
-            continue
-        }
-        # Check membership and build add/remove lists
-        $TargetGroupId = $TargetGroup.id
-        $TargetGroupName = $TargetGroup.displayName
-        $IsAlreadyMember = $false
-        $GroupsToRemoveNames = [System.Collections.Generic.List[string]]::new()
-        foreach ($MappedGroup in $AllGroups) {
-            $MemberSet = $null
-            if ($GroupMembersByGroupIdHash.TryGetValue($MappedGroup.id, [ref]$MemberSet) -and $MemberSet.Contains($DeviceDirectoryObjectId)) {
-                if ($MappedGroup.id -eq $TargetGroupId) { $IsAlreadyMember = $true }
-                else {
-                    $GroupsToRemoveNames.Add($MappedGroup.displayName)
-                    $DevicesToRemoveFromGroups.Add([PSCustomObject]@{
-                        deviceId = $DeviceDirectoryObjectId; deviceName = $DeviceName
-                        groupId = $MappedGroup.id; groupName = $MappedGroup.displayName
-                    })
-                }
+        # Build OS query list to process one operating system at a time
+        [System.Collections.ArrayList]$OsQueries = [System.Collections.ArrayList]::new()
+        [bool]$IsAll = $OperatingSystems -contains 'All'
+        [array]$OsNamesToProcess = if ($IsAll) { @('Android', 'iOS', 'macOS', 'Windows', 'Windows Fallback') } else { $OperatingSystems }
+        [System.Collections.Generic.HashSet[string]]$AddedOSes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($OsName in $OsNamesToProcess) {
+            if ($OsQueryConfigs.ContainsKey($OsName) -and -not $AddedOSes.Contains($OsName)) {
+                [hashtable]$Cfg = $OsQueryConfigs[$OsName]
+                [void]$OsQueries.Add([PSCustomObject]@{
+                    Name = $OsName
+                    BaseFilter = "appId eq '$($Cfg.AppId)' and $GraphFilterString and $($Cfg.EventType) and $($Cfg.OSFilter)"
+                })
+                [void]$AddedOSes.Add($OsName)
             }
         }
-        # Prepare to add to target group if not already a member
-        $NeedsAdd = -not $IsAlreadyMember
-        if ($NeedsAdd) {
-            $DevicesToAddToGroups.Add([PSCustomObject]@{
-                deviceId = $DeviceDirectoryObjectId; deviceName = $DeviceName
-                groupId = $TargetGroupId; groupName = $TargetGroupName
-            })
-        }
-        # Track state for devices needing changes
-        $OldValue = if ($GroupsToRemoveNames.Count -gt 0) { $GroupsToRemoveNames -join ', ' } else { 'N/A' }
-        $NeedsRemove = $GroupsToRemoveNames.Count -gt 0
-        if (-not $NeedsAdd -and -not $NeedsRemove) {
-            & $AddReport -Target $DeviceName -OldValue $OldValue -NewValue $TargetGroupName -Action 'Correct' -Details 'Already in correct group'
-        }
-        else {
-            # Cache state - report will be generated after batch operations complete
-            $DeviceState[$DeviceName] = @{ 
-                needsAdd = $NeedsAdd; needsRemove = $NeedsRemove
-                oldValue = $OldValue; newValue = $TargetGroupName
-                addOk = $true; removeOk = $true; errorMsg = $null 
+        # Initialize variables used
+        [System.Collections.ArrayList]$AllSignInLogs = [System.Collections.ArrayList]::new()
+        [hashtable]$SignInsByDeviceHash = @{}
+        [bool]$WindowsSucceeded = $false
+        # Pre-calculate timestamps for test
+        [string]$TestTimeStr = (Get-Date).AddDays(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        # Get graph objects per OS type
+        foreach ($OsQuery in $OsQueries) {
+            if ($OsQuery.Name -eq 'Windows Fallback' -and $WindowsSucceeded) {
+                Write-Verbose "Windows logs already retrieved, skipping fallback"
+                continue
             }
-        }
-    }
-    
-    # Process batch group operations
-    foreach ($OpConfig in @(
-        @{ items = $DevicesToAddToGroups; method = 'POST'; isAdd = $true; stateKey = 'addOk' },
-        @{ items = $DevicesToRemoveFromGroups; method = 'DELETE'; isAdd = $false; stateKey = 'removeOk' }
-    )) {
-        if ($OpConfig.items.Count -eq 0) { continue }
-        $OpName = if ($OpConfig.isAdd) { 'addition' } else { 'removal' }
-        Write-Verbose "Processing $($OpConfig.items.Count) group membership ${OpName}s"
-        
-        if ($WhatIfPreference) {
-            foreach ($Item in $OpConfig.items) { 
-                Write-Verbose "WhatIf: Would $(if($OpConfig.isAdd){'add'}else{'remove'}) device $($Item.deviceName) $(if($OpConfig.isAdd){'to'}else{'from'}) group $($Item.groupName)" 
-            }
-            continue
-        }
-        
-        foreach ($GroupOp in ($OpConfig.items | Group-Object -Property groupId)) {
-            $GroupId = $GroupOp.Name
-            $GroupName = $GroupOp.Group[0].groupName
+            Write-Verbose "Querying $($OsQuery.Name) sign-in logs"
             try {
-                Write-Verbose "$(if($OpConfig.isAdd){'Adding'}else{'Removing'}) $($GroupOp.Count) devices $(if($OpConfig.isAdd){'to'}else{'from'}) group: $GroupName"
-                $BatchObjects = [System.Collections.Generic.List[PSObject]]::new()
-                foreach ($Dev in $GroupOp.Group) {
-                    $Obj = [PSCustomObject]@{ id = $Dev.deviceId }
-                    if ($OpConfig.isAdd) { $Obj | Add-Member -NotePropertyName 'body' -NotePropertyValue @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$($Dev.deviceId)" } }
-                    $BatchObjects.Add($Obj)
+                # Quick existence check with 1-day window to speed up no-data scenarios
+                [string]$TestFilter = "createdDateTime gt $TestTimeStr and $($OsQuery.BaseFilter)"
+                try {
+                    $QuickCheck = Invoke-MgGraphRequestSingle `
+                        -GraphRunProfile 'beta' `
+                        -GraphMethod 'GET' `
+                        -GraphObject 'auditLogs/signIns' `
+                        -GraphProperties $GraphProperties `
+                        -GraphFilters $TestFilter `
+                        -GraphPageSize 1 `
+                        -GraphCount $false `
+                        -GraphSkipPagination $true `
+                        -GraphMaxRetry 1 `
+                        -GraphWaitTime $GraphWaitTime
+
+                    # Check if results exist
+                    [bool]$HasResults = $false
+                    if ($QuickCheck) {
+                        if ($QuickCheck -is [System.Collections.ICollection] -and $QuickCheck.Count -gt 0) {
+                            $HasResults = $true
+                        } elseif ($QuickCheck -is [PSCustomObject]) {
+                            $HasResults = $true
+                        }
+                    }
+                }
+                catch {
+                    Write-Verbose "Quick check failed for $($OsQuery.Name): $($_.Exception.Message)"
+                    $HasResults = $false  
                 }
                 
-                $BatchParams = @{ GraphRunProfile = 'v1.0'; GraphMethod = $OpConfig.method; GraphBatchSize = 20; GraphWaitTime = $GraphWaitTime; GraphMaxRetry = $GraphMaxRetry }
-                if ($OpConfig.isAdd) { $BatchParams['GraphObject'] = "groups/$GroupId/members/`$ref"; $BatchParams['GraphQuery'] = ''; $BatchParams['GraphNoObjectIdInUrl'] = $true }
-                else { $BatchParams['GraphObject'] = "groups/$GroupId/members"; $BatchParams['GraphQuery'] = '/`$ref' }
-                $null = Invoke-MgGraphRequestBatch @BatchParams -GraphObjects $BatchObjects
-
-                # Update cache on success
-                foreach ($Dev in $GroupOp.Group) { Write-Verbose "$(if($OpConfig.isAdd){'Added'}else{'Removed'}) device $($Dev.deviceName) $(if($OpConfig.isAdd){'to'}else{'from'}) group $GroupName" }
-                $MemberSet = $null
-                if ($GroupMembersByGroupIdHash.TryGetValue($GroupId, [ref]$MemberSet)) {
-                    foreach ($Dev in $GroupOp.Group) { 
-                        if ($OpConfig.isAdd) { [void]$MemberSet.Add($Dev.deviceId) } else { [void]$MemberSet.Remove($Dev.deviceId) }
+                if ($HasResults) {
+                    Write-Verbose "Found $($OsQuery.Name) logs, fetching full dataset using optimized batch approach..."
+                    # Build time chunks for more stable retrieval (7-day chunks)
+                    [int]$ChunkDays = 7
+                    [datetime]$CurrentStart = $SignInsStartTime
+                    [datetime]$EndTime = [DateTime]::Now
+                    [System.Collections.ArrayList]$TimeChunks = [System.Collections.ArrayList]::new()
+                    while ($CurrentStart -lt $EndTime) {
+                        [datetime]$CurrentEnd = if ($CurrentStart.AddDays($ChunkDays) -gt $EndTime) { $EndTime } else { $CurrentStart.AddDays($ChunkDays) }
+                        [void]$TimeChunks.Add([PSCustomObject]@{
+                            id = "$($OsQuery.Name)_$($CurrentStart.ToString('yyyyMMdd'))_$($CurrentEnd.ToString('yyyyMMdd'))"
+                            StartTime = $CurrentStart
+                            EndTime = $CurrentEnd
+                        })
+                        $CurrentStart = $CurrentEnd
+                    }
+                    Write-Verbose "Created $($TimeChunks.Count) time chunks for $($OsQuery.Name)"
+                    [System.Collections.ArrayList]$ChunkResults = [System.Collections.ArrayList]::new()
+                    foreach ($Chunk in $TimeChunks) {
+                        [string]$ChunkFilter = "createdDateTime gt $($Chunk.StartTime.ToString('yyyy-MM-ddTHH:mm:ssZ')) and createdDateTime lt $($Chunk.EndTime.ToString('yyyy-MM-ddTHH:mm:ssZ')) and $($OsQuery.BaseFilter)"
+                        Write-Verbose "Fetching chunk: $($Chunk.id)"
+                        try {
+                            $ChunkLogs = Invoke-MgGraphRequestSingle `
+                                -GraphRunProfile 'beta' `
+                                -GraphMethod 'GET' `
+                                -GraphObject 'auditLogs/signIns' `
+                                -GraphProperties $GraphProperties `
+                                -GraphFilters $ChunkFilter `
+                                -GraphPageSize 999 `
+                                -GraphMaxRetry $GraphMaxRetry `
+                                -GraphWaitTime $GraphWaitTime
+                            
+                            if ($ChunkLogs) {
+                                # Force array to handle single-object returns from Graph API
+                                [array]$ChunkLogsArray = @($ChunkLogs)
+                                Write-Verbose "Chunk $($Chunk.id): Retrieved $($ChunkLogsArray.Count) logs"
+                                [void]$ChunkResults.AddRange($ChunkLogsArray)
+                            }
+                        }
+                        catch {
+                            Write-Warning "Chunk $($Chunk.id) failed: $($_.Exception.Message)"
+                        }
+                    }
+                    
+                    # Process all results for this OS type
+                    if ($ChunkResults.Count -gt 0) {
+                        Write-Verbose "Processing $($ChunkResults.Count) logs for $($OsQuery.Name)"
+                        # Apply ReplaceUserAccounts filtering if specified
+                        [array]$FilteredLogs = if ($ReplaceUserAccounts -and $ReplaceUserAccounts.Count -gt 0) {
+                            [int]$PreCount = $ChunkResults.Count
+                            [array]$Filtered = @($ChunkResults | Where-Object {
+                                [string]$Upn = $_.userPrincipalName
+                                [bool]$ShouldExclude = $false
+                                foreach ($pattern in $ReplaceUserAccounts) {
+                                    if ($Upn -like $pattern) {
+                                        $ShouldExclude = $true
+                                        break
+                                    }
+                                }
+                                -not $ShouldExclude
+                            })
+                            Write-Verbose "Pre-filtered replace accounts for $($OsQuery.Name): $PreCount → $($Filtered.Count)"
+                            $Filtered
+                        } 
+                        else {$ChunkResults}
+                        
+                        # Group sign-ins by device ID efficiently
+                        foreach ($SignIn in $FilteredLogs) {
+                            [string]$DeviceId = $SignIn.deviceDetail.deviceId
+                            if ($DeviceId) {
+                                if (-not $SignInsByDeviceHash.ContainsKey($DeviceId)) {
+                                    $SignInsByDeviceHash[$DeviceId] = [System.Collections.ArrayList]::new()
+                                }
+                                [void]$SignInsByDeviceHash[$DeviceId].Add($SignIn)
+                            }
+                        }
+                        [void]$AllSignInLogs.AddRange($FilteredLogs)
+                        if ($OsQuery.Name -eq 'Windows') { $WindowsSucceeded = $true }
+                        Write-Verbose "Completed $($OsQuery.Name) - Total logs: $($AllSignInLogs.Count), Unique devices: $($SignInsByDeviceHash.Count)"
                     }
                 }
             }
             catch {
-                $ErrorMsg = $_.Exception.Message
-                Write-Error "Failed to $(if($OpConfig.isAdd){'add devices to'}else{'remove devices from'}) group '$GroupName': $ErrorMsg"
-                foreach ($Dev in $GroupOp.Group) {
-                    $State = $null
-                    if ($DeviceState.TryGetValue($Dev.deviceName, [ref]$State)) {
-                        $State[$OpConfig.stateKey] = $false
-                        $State.errorMsg = "$(if($OpConfig.isAdd){'Add'}else{'Remove'}) failed: $ErrorMsg"
-                    }
-                }
+                Write-Warning "Failed to retrieve $($OsQuery.Name) sign-in logs: $($_.Exception.Message)"
             }
         }
-    }
-    
-    # Generate final reports for all devices that needed changes
-    foreach ($DeviceName in $DeviceState.Keys) {
-        $State = $DeviceState[$DeviceName]
-        if ($WhatIfPreference) {
-            $Details = if ($State.needsAdd -and $State.needsRemove) { 'Would add to correct group and remove from incorrect groups' }
-                       elseif ($State.needsAdd) { 'Would add to correct group' } else { 'Would remove from incorrect groups' }
-            & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action 'WhatIf' -Details $Details
-        }
-        elseif (-not $State.addOk -or -not $State.removeOk) {
-            & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action 'Failed' -Details $State.errorMsg
+        if ($AllSignInLogs -and $AllSignInLogs.Count -gt 0) {
+            Write-Verbose "Successfully retrieved $($AllSignInLogs.Count) total sign-in logs from $($SignInsByDeviceHash.Count) unique devices"
         }
         else {
-            $Action = if ($State.needsAdd -and $State.needsRemove) { 'Success-AddedRemoved' }
-                      elseif ($State.needsAdd) { 'Success-Added' } else { 'Success-Removed' }
-            $Details = if ($State.needsAdd -and $State.needsRemove) { 'Added to correct group and removed from incorrect groups' }
-                       elseif ($State.needsAdd) { 'Added to correct group' } else { 'Removed from incorrect groups' }
-            & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action $Action -Details $Details
+            Write-Warning "No sign-in logs found for selected operating systems"
         }
     }
-    Write-Verbose "Group membership processing complete. Additions: $($DevicesToAddToGroups.Count), Removals: $($DevicesToRemoveFromGroups.Count)"
+    catch {
+        Write-Error "Failed to get sign-in logs: $($_.Exception.Message)"
+        throw
+    }
+
+    # Process all devices and set the primary user to the most frequent user
+    foreach ($Device in $AllDevices) {
+        # Cache device properties for faster access
+        [string]$DeviceName = $Device.DeviceName
+        [string]$DeviceId = $Device.id
+        [string]$DeviceAzureAdId = $Device.AzureAdDeviceId
+
+        # Get current Primary User
+        [object]$CurrentPrimaryUser = $null
+        [string]$CurrentPrimaryUserUPN = if ($Device.userId -and $AllUsersByIdHash.TryGetValue($Device.userId, [ref]$CurrentPrimaryUser)) {
+            Write-Verbose "Current primary user: $($CurrentPrimaryUser.userPrincipalName) for device $DeviceName"
+            $CurrentPrimaryUser.userPrincipalName
+        } else {
+            Write-Warning "Current primary user for device $DeviceName is missing or invalid"
+            "No.CurrentPrimaryUser"
+        }
+        
+        # Early exit: Check if current primary user matches KeepUserAccounts pattern
+        if ($KeepUserAccounts -and $KeepUserAccounts.Count -gt 0 -and $CurrentPrimaryUserUPN -ne 'No.CurrentPrimaryUser') {
+            [bool]$IsProtected = $false
+            foreach ($KeepPattern in $KeepUserAccounts) {
+                if ($CurrentPrimaryUserUPN -like $KeepPattern) {
+                    & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue "N/A" -Action "Skipped-Protected" -Details "Primary User Protected By KeepUserAccounts"
+                    Write-Verbose "Current primary user $CurrentPrimaryUserUPN matches keep account '$KeepPattern' - will not replace"
+                    $IsProtected = $true
+                    break
+                }
+            }
+            if ($IsProtected) { continue }
+        }
+        
+        try {
+            # Early exit: Check if device has sign-in logs
+            [System.Collections.ArrayList]$SignInLogsOnDevice = $SignInsByDeviceHash[$DeviceAzureAdId]
+            if (-not $SignInLogsOnDevice) {
+                & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue "No.SignInLogs" -Action "Skipped-NoLogs" -Details "Missing SignIn Logs For The Device"
+                Write-Warning "No SignIn logs found for device $DeviceName"
+                continue
+            }
+            
+            # Find most frequent user
+            [array]$GroupedUsers = @($SignInLogsOnDevice | Group-Object -Property userPrincipalName | Sort-Object -Property Count -Descending)
+            [string]$MostFrequentUserUPN = ($GroupedUsers | Select-Object -First 1).Name
+            
+            # Early exit: No valid frequent user found
+            if (-not $MostFrequentUserUPN) {
+                & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue "No.MostFrequentUser" -Action "Skipped-NoUser" -Details "Missing Most Frequent User in Sign-In Logs"
+                Write-Warning "No valid Most Frequent User found in sign-in logs for device $DeviceName"
+                continue
+            }
+            
+            # Trim whitespace and normalize the UPN (sign-in logs might have extra spaces)
+            $MostFrequentUserUPN = $MostFrequentUserUPN.Trim()
+            
+            # Lookup user ID with case-insensitive matching
+            [string]$MostFrequentUserID = $null
+            [object]$FoundUser = $null
+            
+            if ($AllUsersByUPNHash.TryGetValue($MostFrequentUserUPN, [ref]$FoundUser)) {
+                $MostFrequentUserID = $FoundUser.id
+            }
+            
+            [int]$SignInCount = ($GroupedUsers | Select-Object -First 1).Count
+            Write-Verbose "Selected primary user candidate: $MostFrequentUserUPN (Sign-ins: $SignInCount)"
+            
+            # Early exit: Check if MostFrequentUserID is missing
+            if (-not $MostFrequentUserID) {
+                & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "Failed" -Details "Most Frequent User $MostFrequentUserUPN Not Found"
+                Write-Warning "Most frequent user '$MostFrequentUserUPN' not found in user hashtable for device $DeviceName (hashtable has $($AllUsersByUPNHash.Count) entries)"
+                continue
+            }
+            
+            # Early exit: Check if primary user already correct
+            if ($CurrentPrimaryUserUPN -ne 'No.CurrentPrimaryUser' -and $MostFrequentUserUPN.Equals($CurrentPrimaryUserUPN, [StringComparison]::OrdinalIgnoreCase)) {
+                & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "Correct" -Details "Correct Primary User"
+                Write-Verbose "Device $DeviceName already has the correct Primary User $CurrentPrimaryUserUPN"
+                continue
+            }
+            
+            # Change of primary user is needed
+            Write-Verbose "Determined change needed on Device $DeviceName primary user from $CurrentPrimaryUserUPN to $MostFrequentUserUPN"
+
+            if ($PSCmdlet.ShouldProcess("Device $DeviceName", "Set Primary User To $MostFrequentUserUPN")) {
+                try {
+                    # Attempt to set the primary user
+                    [string]$GraphBody = @{ "@odata.id" = "https://graph.microsoft.com/beta/users/$MostFrequentUserID" } | ConvertTo-Json
+                    
+                    Invoke-MgGraphRequestSingle `
+                        -GraphRunProfile 'beta' `
+                        -GraphMethod 'POST' `
+                        -GraphBody $GraphBody `
+                        -GraphObject "deviceManagement/managedDevices/$DeviceId/users/`$ref" `
+                        -GraphMaxRetry $GraphMaxRetry `
+                        -GraphWaitTime $GraphWaitTime
+
+                    
+                    & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "Success-Updated" -Details "Primary User Set To $MostFrequentUserUPN"
+                    Write-Verbose "Successfully set Primary User $MostFrequentUserUPN for device $DeviceName"
+                }
+                catch {
+                    & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "Failed" -Details "$($_.Exception.Message)"
+                    Write-Warning "Failed to set Primary User $MostFrequentUserUPN for device $DeviceName with error: $($_.Exception.Message)"
+                }
+            } else {
+                & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue $MostFrequentUserUPN -Action "WhatIf" -Details "Would set primary User $MostFrequentUserUPN"
+                Write-Verbose "WhatIf: Would set Primary User $MostFrequentUserUPN for device $DeviceName"
+            }
+        }
+        catch {
+            & $AddReport -Target $DeviceName -OldValue $CurrentPrimaryUserUPN -NewValue 'FailedDuringProcessing' -Action "Failed" -Details "$($_.Exception.Message)"
+            Write-Error "Failed to process device $DeviceName`: $($_.Exception.Message)"
+        }
+    }
 }
 catch {
     Write-Error "Script execution failed: $($_.Exception.Message)"
@@ -1954,4 +1918,3 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
-
