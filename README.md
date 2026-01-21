@@ -1,5 +1,4 @@
-# Intune
-Collection of my Intunescripts
+# Collection of Mr T-Bone´s Intune scripts
 
 ## [Set-IntunePrimaryUsers.ps1](Set-IntunePrimaryUsers.ps1)
 Script for Intune to set Primary User on Device
@@ -8,7 +7,7 @@ Script for Intune to set Primary User on Device
 This script gets Entra Sign-in logs for Windows and application sign-ins,
 determines the most frequent user in the last 30 days, and sets them as Primary User.
 Uses Microsoft Graph and requires only the Microsoft.Graph.Authentication module.
-## Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1
+## [Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1](<Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1>)
 Script for Intune to add device to a group based on primary user
 
 ### Description
@@ -16,7 +15,7 @@ This script will get the All devices in Intune and their primary users.
 The script then use a given attribute from the primary user (like Country, City) to add the device to a group based on that value
 The script uses Ms Graph and only requires the Microsoft.Graph.Authentication module
 
-## Add-IntuneScopeTagsBasedOnPrimaryUser.ps1
+## [Add-IntuneScopeTagsBasedOnPrimaryUser.ps1](<Add-IntuneScopeTagsBasedOnPrimaryUser.ps1>)
 Script for Intune to set Scope Tags on Device based on Primary Users and their attributes
 
 ### Description
@@ -32,9 +31,10 @@ Script for Entra/Azure to add required Microsoft Graph API permissions to a Mana
 This script connects to Entra ID with the Microsoft Graph module
 Then assign the listed Microsoft Graph API permissions to the specified Managed Identity.
 
-## [Intune - Drive Mapping.ps1](Intune - Drive Mapping.ps1)
+## [Intune - Drive Mapping.ps1](<Intune - Drive Mapping.ps1>)
 > [!IMPORTANT]
-> Important calloutRenamed to Remediation-MapDrivesCloudNative.ps1 and moved to remediations folder
+> Renamed to Remediation-MapDrivesCloudNative.ps1 and moved to remediations folder
+
 This script will map drives and printers for cloud native devices
 It can be used as both script and remediation script in Intune.
 I prefer to use it as a remediation script to be able to update with new versions.
@@ -45,9 +45,10 @@ When run as SYSTEM (via Intune), it creates a scheduled task that runs as the lo
 The scheduled task executes on logon and network connection events to map drives/printers.
 Group memberships are queried via LDAP to determine which mappings apply to the user.
 
-## [Intune - Printer Mapping.ps1](Intune - Printer Mapping.ps1)
+## [Intune - Printer Mapping.ps1](<Intune - Printer Mapping.ps1>)
 > [!IMPORTANT]
-> Important calloutRenamed to Remediation-MapPrintersCloudNative.ps1 and moved to remediations folder
+> Renamed to Remediation-MapPrintersCloudNative.ps1 and moved to remediations folder
+
 This script will map drives and printers for cloud native devices
 It can be used as both script and remediation script in Intune.
 I prefer to use it as a remediation script to be able to update with new versions.
