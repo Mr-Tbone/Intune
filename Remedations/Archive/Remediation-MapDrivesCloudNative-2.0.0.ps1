@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        2.0.1
+.VERSION        2.0.0
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16bd
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -11,7 +11,6 @@
     1.1 2021-10-04 Added logging to eventlog
     1.2 2021-10-05 Added detection mode to run as remediation script
     2.0.0 2026-01-20 Major update with updated functions, logic and error handling
-    2.0.1 2026-01-21 Fix some syntax and added script parameters logname and logeventids
 #>
 
 <#
@@ -27,11 +26,11 @@
     Group memberships are queried via LDAP to determine which mappings apply to the user.
 
 .EXAMPLE
-    .\Remediation-MapPrintersCloudNative.ps1
+    .\Remediation-MapDrivesCloudNative.ps1
     When deployed via Intune as SYSTEM, creates scheduled task and scripts for drive mapping.
 
 .EXAMPLE
-    .\Remediation-MapPrintersCloudNative.ps1 -LogVerboseEnabled $true -LogToDisk $true
+    .\Remediation-MapDrivesCloudNative.ps1 -LogVerboseEnabled $true -LogToDisk $true
     Runs with verbose logging enabled and saves logs to disk.
 
 .NOTES
@@ -92,9 +91,9 @@ param(
 #Printers:  $MapObjects += @{PrinterName="PrinterName"  ;Default=$true      ;Path="\\printserver\printerName"   ;ADGroups="My Group"}
 #Drives:    $MapObjects += @{Letter="X"                 ;Persistent=$true   ;Path="\\fileserver\fileshare"      ;ADGroups="My Group"    ;Label="My drive"}
 $MapObjects = @()
-$MapObjects+=@{PrinterName=	"Printer1"	;Default=$false	;Path=	"\\Printserver.tbone.se\Printer1"	;ADGroups=	"Sales"	    }
-$MapObjects+=@{PrinterName=	"Printer2"	;Default=$false	;Path=	"\\Printserver.tbone.se\Printer2"	;ADGroups=	"Consultant"}
-$MapObjects+=@{PrinterName=	"Printer3"	;Default=$true	;Path=	"\\Printserver.tbone.se\Printer3"	;ADGroups=	""	        }
+$MapObjects+=@{Letter="S";Persistent=$true;Path="\\fileserver.tbone.se\Sales"	    ;ADGroups=	"Sales"	        ;Label="Sales"      }
+$MapObjects+=@{Letter="D";Persistent=$true;Path="\\fileserver.tbone.se\Consult"     ;ADGroups=	"Consultants"   ;Label="Consultants"}
+$MapObjects+=@{Letter="W";Persistent=$true;Path="\\fileserver.tbone.se\Common"	    ;ADGroups=	"Loc_ESC"       ;Label=""           }
 #endregion
 
 #region ---------------------------------------------------[Set global script settings]--------------------------------------------
@@ -893,4 +892,3 @@ finally {
     }
 }
 #endregion
-

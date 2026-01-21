@@ -1,6 +1,5 @@
-#requires -Version 5.1
 <#PSScriptInfo
-.VERSION        2.0.0
+.VERSION        2.0.1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16bd
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -12,6 +11,7 @@
     1.1 2021-10-04 Added logging to eventlog
     1.2 2021-10-05 Added detection mode to run as remediation script
     2.0.0 2026-01-20 Major update with updated functions, logic and error handling
+    2.0.1 2026-01-21 Fix some syntax and added script parameters logname and logeventids
 #>
 
 <#
@@ -27,11 +27,11 @@
     Group memberships are queried via LDAP to determine which mappings apply to the user.
 
 .EXAMPLE
-    .\Intune - Drive Mapping.ps1
+    .\Remediation-MapDrivesCloudNative.ps1
     When deployed via Intune as SYSTEM, creates scheduled task and scripts for drive mapping.
 
 .EXAMPLE
-    .\Intune - Drive Mapping.ps1 -LogVerboseEnabled $true -LogToDisk $true
+    .\Remediation-MapDrivesCloudNative.ps1 -LogVerboseEnabled $true -LogToDisk $true
     Runs with verbose logging enabled and saves logs to disk.
 
 .NOTES
@@ -59,8 +59,7 @@ param(
 
     [Parameter(Mandatory = $false, HelpMessage = "Force replace all scripts and scheduled tasks even if version is the same")]
     [Bool]$ForceReplaceAll          = $false,
-
-# ---------------------------------- Logging (Invoke-TboneLog)-------------------------------------------------------
+# ==========> Logging (Invoke-TboneLog) <==============================================================================
     [Parameter(Mandatory = $false,          HelpMessage='Name of Log, to set name for Eventlog and Filelog')]
     [string]$LogName                = "",
 
@@ -114,29 +113,32 @@ else                        {$VerbosePreference = 'SilentlyContinue'}
 
 #region ---------------------------------------------------[Static Variables]------------------------------------------------------
 # Constants
-[string]$USERS_GROUP_SID = "S-1-5-32-545"   # Built-in Users group, used for scheduled task
-[string]$SYSTEM_USER_SID = "S-1-5-18"       # SYSTEM account, used for creating scheduled task
-[int]$LDAP_PORT = 389                       # LDAP port for AD queries
-[int]$LDAP_TIMEOUT_MS = 2000                # Timeout for LDAP connectivity test in milliseconds
+[string]$UsersGroupSid  = "S-1-5-32-545"    # Built-in Users group, used for scheduled task
+[string]$SystemUserSid  = "S-1-5-18"        # SYSTEM account, used for creating scheduled task
+[int]$LdapPort          = 389               # LDAP port for AD queries
+[int]$LdapTimeoutMs     = 2000              # Timeout for LDAP connectivity test in milliseconds
 
-#Early exit if no mapping objects defined
-if (-not $MapObjects -or $MapObjects.Count -eq 0) { Write-Error "MapObjects array is empty"; exit 1 }
-
-# Determine execution mode based on script filename
-[string]$ExecutionMode = switch -Wildcard ($PSCommandPath) {
-    "*detect*"    { "Detection" }   #Intune Detection Script
-    "*remediat*"  { "Remediation" } #Intune Remediation Script
-    default       { "Standalone" }  #Standalone Script
+# Determine execution mode based on script filename only
+[string]$ExecutionMode = switch -Wildcard (Split-Path $PSCommandPath -Leaf) {
+    "*detect*"    { "Detection"; break }   # Stops searching after match
+    "*remediat*"  { "Remediation"; break } 
+    default       { "Standalone" }
 }
 # Determine object type based on first mapping object and set namings accordingly
-if ($MapObjects -and $MapObjects[0] -and $MapObjects[0].Keys -contains 'Letter') {[string]$ObjectType = "Drive"}
-else {[string]$ObjectType = "Printer"}
-if(-not [string]::IsNullOrWhiteSpace($LogName)) {[string]$TaskName = $LogName}
-else {[string]$TaskName     = "Intune$($ObjectType)Mapping"}
+if (-not $MapObjects) { throw "MapObjects array is empty or not defined" }
+$ObjectType = switch ($MapObjects[0]) {
+    { $_.ContainsKey('Letter') }      { 'Drive'; break }
+    { $_.ContainsKey('PrinterName') } { 'Printer'; break }
+    default { throw "Unknown MapObject type: First object must contain 'Letter' or 'PrinterName' key" }
+}
+# Set Names and Paths based on ObjectType for scripts and scheduled task
+[string]$TaskName           = "Intune$($ObjectType)Mapping"
 [string]$TaskDescription    = "Map $($ObjectType) with script from Intune"
 [string]$ScriptSavePath     = $(Join-Path -Path $CorpDataPath -ChildPath "scripts\$($TaskName).ps1")
 [string]$vbsSavePath        = $(Join-Path -Path $CorpDataPath -ChildPath "scripts\$($TaskName).vbs")
 [string]$VersionFilePath    = $(Join-Path -Path $CorpDataPath -ChildPath "scripts\$($TaskName).version")
+# ==========> Logging (Invoke-TboneLog) <==============================================================================
+if ([string]::IsNullOrWhiteSpace($LogName)) { $LogName = $TaskName }
 #endregion
 
 #region ---------------------------------------------------[Import Modules and Extensions]-----------------------------------------
@@ -164,7 +166,7 @@ function Invoke-TboneLog {
     param(
         [Parameter(                     HelpMessage='Start=Begin logging, Stop=End and output log array')]
         [ValidateSet('Start','Stop')]
-        [string]$Mode,
+        [string]$LogMode,
         [Parameter(                     HelpMessage='Name of Log, to set name for Eventlog and Filelog')]
         [string]$LogName        = "PowerShellScript",
         [Parameter(                     HelpMessage='Show output in console during execution')]
@@ -181,17 +183,17 @@ function Invoke-TboneLog {
         [string]$LogPath        = "$env:TEMP"
     )
     # Auto-detect mode: if logger functions is already loaded in memory and no mode specified, assume Stop
-    if(!$Mode){$Mode=if(Get-Variable -Name _l -Scope Global -EA 0){'Stop'}else{'Start'}}
+    if(!$LogMode){$LogMode=if(Get-Variable -Name _l -Scope Global -EA 0){'Stop'}else{'Start'}}
     if(!$LogPath){$LogPath=if($global:_p){$global:_p}elseif($env:TEMP){$env:TEMP}else{'/tmp'}}
     # Stop mode: Save logs and cleanup
-    if ($Mode -eq 'Stop') {
+    if ($LogMode -eq 'Stop') {
         if((Get-Variable -Name _l -Scope Global -EA 0) -and (Test-Path function:\global:_Save)){_Save;if($global:_r){,$global:_l.ToArray()}}
         Unregister-Event -SourceIdentifier PowerShell.Exiting -ea 0 -WhatIf:$false
         if(Test-Path function:\global:_Clean){_Clean}
         return
     }
     # Start mode: Initialize logging and proxy all Write-* functions
-    if ($Mode -eq 'Start') {
+    if ($LogMode -eq 'Start') {
         # Create helper functions and variables
         $global:_az=$env:AZUREPS_HOST_ENVIRONMENT -or $env:AUTOMATION_ASSET_ACCOUNTID # Detect Azure Automation environment
         $global:_l=[Collections.Generic.List[string]]::new();$global:_g=$LogToGUI;$global:_s=$Logname;$global:_n="{0}-{1:yyyyMMdd-HHmmss}"-f$Logname,(Get-Date);$global:_p=$LogPath;$global:_d=$LogToDisk;$global:_e=$LogToEventlog;$global:_i=$LogEventIds;$global:_r=$LogToHost;$global:_w=([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)
@@ -310,10 +312,10 @@ function Get-ADGroupMemberships {
             # Test LDAP connectivity with fast TCP test (timeout after 2 seconds)
             try {
                 $TCPClient = [System.Net.Sockets.TcpClient]::new()
-                $connectTask = $TCPClient.ConnectAsync($Domain, $LDAP_PORT)
-                $waitResult = $connectTask.Wait($LDAP_TIMEOUT_MS)
+                $connectTask = $TCPClient.ConnectAsync($Domain, $LdapPort)
+                $waitResult = $connectTask.Wait($LdapTimeoutMs)
                 if (-not $waitResult) {
-                    Write-Error "Failed to connect to domain controller for $Domain (timeout after $LDAP_TIMEOUT_MS ms)"
+                    Write-Error "Failed to connect to domain controller for $Domain (timeout after $LdapTimeoutMs ms)"
                     return $GroupMembershipList
                 }
                 if ($connectTask.IsFaulted) {
@@ -423,7 +425,7 @@ function New-PrinterMapping {
         [string]$PrinterPath,
         
         [Parameter(Mandatory = $false, HelpMessage = "Set this printer as the default printer. Default is false")]
-        [bool]$Default = $false
+        [bool]$PrinterDefault = $false
     )
     
     begin {
@@ -436,7 +438,7 @@ function New-PrinterMapping {
         
         # Helper function to set default printer
         $SetDefaultPrinter = {
-            if (-not $Default) { return $true }
+            if (-not $PrinterDefault) { return $true }
             $DefaultPrinterCim = $null
             try {
                 $DefaultPrinterCim = Get-CimInstance -Class Win32_Printer -Filter "Name='$($PrinterPath -replace '\\','\\\\')' " -EA Stop
@@ -464,8 +466,8 @@ function New-PrinterMapping {
             # Verify default state matches desired state
             try {
                 $PrinterCim = Get-CimInstance -Class Win32_Printer -Filter "Name='$($PrinterPath -replace '\\','\\\\')' " -EA Stop
-                if ($PrinterCim -and $PrinterCim.Default -eq $Default) {
-                    Write-Verbose "Printer '$PrinterName' already correctly mapped with default=$Default"
+                if ($PrinterCim -and $PrinterCim.Default -eq $PrinterDefault) {
+                    Write-Verbose "Printer '$PrinterName' already correctly mapped with default=$PrinterDefault"
                     return
                 }
             }
@@ -479,18 +481,18 @@ function New-PrinterMapping {
             }
             
             # Need to remap - remove existing first
-            $null = Remove-Printer -Name $PrinterPath -EA SilentlyContinue -EV errorvar
-            if ($errorvar.Count -gt 0) {
-                Write-Error "Failed to remove existing printer '$PrinterName' with error: $errorvar"
+            $null = Remove-Printer -Name $PrinterPath -EA SilentlyContinue -EV ErrorVar
+            if ($ErrorVar.Count -gt 0) {
+                Write-Error "Failed to remove existing printer '$PrinterName' with error: $ErrorVar"
                 return
             }
             Write-Verbose "Removed existing printer '$PrinterName' to remap with correct default state"
         }
         
         # Add the printer
-        $null = Add-Printer -ConnectionName $PrinterPath -EA SilentlyContinue -EV errorvar
-        if ($errorvar.Count -gt 0) {
-            Write-Error "Failed to add printer '$PrinterName' ($PrinterPath) with error: $errorvar"
+        $null = Add-Printer -ConnectionName $PrinterPath -EA SilentlyContinue -EV ErrorVar
+        if ($ErrorVar.Count -gt 0) {
+            Write-Error "Failed to add printer '$PrinterName' ($PrinterPath) with error: $ErrorVar"
             return
         }
         Write-Verbose "Success to add printer '$PrinterName' ($PrinterPath)"
@@ -521,16 +523,16 @@ function New-DriveMapping {
     param(
         [Parameter(Mandatory = $true, HelpMessage = "Drive letter to map (e.g., 'S' for S:)")]
         [ValidatePattern('^[A-Z]$')]
-        [string]$Letter,
+        [string]$DriveLetter,
         
         [Parameter(Mandatory = $true, HelpMessage = "UNC path to the network share (e.g., '\\\\fileserver\\share')")]
         [string]$DrivePath,
         
         [Parameter(Mandatory = $false, HelpMessage = "Friendly label for the drive shown in Explorer")]
-        [string]$Label = "",
+        [string]$DriveLabel = "",
         
         [Parameter(Mandatory = $false, HelpMessage = "Make the drive mapping persistent across reboots. Default is true")]
-        [bool]$Persistent = $true
+        [bool]$DrivePersistent = $true
     )
     
     begin {
@@ -538,33 +540,33 @@ function New-DriveMapping {
     }
     
     process {
-        Write-Verbose "Processing drive: $Letter`: ($DrivePath)"
+        Write-Verbose "Processing drive: $DriveLetter`: ($DrivePath)"
         
         # Helper scriptblock to create drive and set label
         $CreateDriveAndSetLabel = {
-            $null = New-PSDrive -PSProvider FileSystem -Name $Letter -Root $DrivePath -Description $Label -Persist:$Persistent -Scope Global -EA SilentlyContinue -EV errorvar
-            if ($errorvar.Count -gt 0) {
-                Write-Error "Failed to add drive '$Letter`:' ($DrivePath) with error: $errorvar"
+            $null = New-PSDrive -PSProvider FileSystem -Name $DriveLetter -Root $DrivePath -Description $DriveLabel -Persist:$DrivePersistent -Scope Global -EA SilentlyContinue -EV ErrorVar
+            if ($ErrorVar.Count -gt 0) {
+                Write-Error "Failed to add drive '$DriveLetter`:' ($DrivePath) with error: $ErrorVar"
                 return $false
             }
-            Write-Verbose "Success to add drive '$Letter`:' ($DrivePath)"
+            Write-Verbose "Success to add drive '$DriveLetter`:' ($DrivePath)"
             
             # Set the drive label in Explorer if specified
-            if (-not [string]::IsNullOrEmpty($Label)) {
+            if (-not [string]::IsNullOrEmpty($DriveLabel)) {
                 $ShellApp = $null
                 try {
                     $ShellApp = New-Object -ComObject Shell.Application
-                    $DriveNamespace = $ShellApp.NameSpace("$Letter`:")
+                    $DriveNamespace = $ShellApp.NameSpace("$DriveLetter`:")
                     if ($DriveNamespace) {
-                        $DriveNamespace.Self.Name = $Label
-                        Write-Verbose "Success to set drive '$Letter`:' label to '$Label'"
+                        $DriveNamespace.Self.Name = $DriveLabel
+                        Write-Verbose "Success to set drive '$DriveLetter`:' label to '$DriveLabel'"
                     }
                     else {
-                        Write-Warning "Failed to get namespace for drive '$Letter`:' to set label"
+                        Write-Warning "Failed to get namespace for drive '$DriveLetter`:' to set label"
                     }
                 }
                 catch {
-                    Write-Warning "Failed to set drive '$Letter`:' label to '$Label' with error: $_"
+                    Write-Warning "Failed to set drive '$DriveLetter`:' label to '$DriveLabel' with error: $_"
                 }
                 finally {
                     if ($ShellApp) { 
@@ -577,30 +579,30 @@ function New-DriveMapping {
         }
         
         # Check if drive already exists
-        $ExistingDrive = Get-PSDrive -Name $Letter -EA SilentlyContinue
+        $ExistingDrive = Get-PSDrive -Name $DriveLetter -EA SilentlyContinue
         if (-not $ExistingDrive) {
             $null = & $CreateDriveAndSetLabel
             return
         }
         
         # Drive exists - check if path matches
-        Write-Verbose "Found existing drive '$Letter`:'"
-        $existingRoot = $ExistingDrive.DisplayRoot
-        if (-not $existingRoot) { $existingRoot = $ExistingDrive.Root }
-        if ($existingRoot -eq $DrivePath) {
-            Write-Verbose "Drive '$Letter`:' already correctly mapped to '$DrivePath'"
+        Write-Verbose "Found existing drive '$DriveLetter`:'"
+        $ExistingRoot = $ExistingDrive.DisplayRoot
+        if (-not $ExistingRoot) { $ExistingRoot = $ExistingDrive.Root }
+        if ($ExistingRoot -eq $DrivePath) {
+            Write-Verbose "Drive '$DriveLetter`:' already correctly mapped to '$DrivePath'"
             return
         }
         
         # Path differs - need to remap
-        Write-Verbose "Drive '$Letter`:' mapped to '$existingRoot' but should be '$DrivePath' - remapping"
+        Write-Verbose "Drive '$DriveLetter`:' mapped to '$ExistingRoot' but should be '$DrivePath' - remapping"
         # Remove existing drive using net use (handles persistent mappings better than Remove-PSDrive)
-        $null = net use "$Letter`:" /delete 2>&1
+        $null = net use "$DriveLetter`:" /delete 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to remove existing drive '$Letter`:' (exit code: $LASTEXITCODE)"
+            Write-Error "Failed to remove existing drive '$DriveLetter`:' (exit code: $LASTEXITCODE)"
             return
         }
-        Write-Verbose "Success to remove existing drive '$Letter`:'"
+        Write-Verbose "Success to remove existing drive '$DriveLetter`:'"
         
         # Create the new drive
         $null = & $CreateDriveAndSetLabel
@@ -612,16 +614,17 @@ function New-DriveMapping {
 
 #region ---------------------------------------------------[[Script Execution]------------------------------------------------------
 # Start T-Bone custom logging (can be removed if you don't want to use T-Bone logging)
-Invoke-TboneLog -Mode Start -Logname $TaskName -LogToGUI $LogToGUI -LogToEventlog $LogToEventlog -LogEventIds $LogEventIds -LogToDisk $LogToDisk -LogPath $LogToDiskPath -LogToHost $LogToHost
+Invoke-TboneLog -LogMode Start -Logname $LogName -LogToGUI $LogToGUI -LogToEventlog $LogToEventlog -LogEventIds $LogEventIds -LogToDisk $LogToDisk -LogPath $LogToDiskPath -LogToHost $LogToHost
 
 # Check if running as SYSTEM - needed in finally block for exit handling
-$RunningAsSystem = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq $SYSTEM_USER_SID
+$RunningAsSystem = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq $SystemUserSid
 [bool]$IsCompliant = $true
 
 try {
-    # Validate mapping objects
+    # Validate mapping objects and throw on first error
+    if (-not $MapObjects -or $MapObjects.Count -eq 0) { throw "MapObjects array is empty or not defined" }
     $MapObjects = Test-MapObjectValidation -MapObjects $MapObjects
-
+    
     # If running as system, create scheduled task to run the powershell script as user
     if ($RunningAsSystem) {
         if ($ExecutionMode -eq "Detection") { Write-Verbose "Running in detection mode - will check compliance only" }
@@ -725,7 +728,7 @@ try {
                     # Create logon trigger
                     $Trigger_atLogon = New-ScheduledTaskTrigger -AtLogOn
                     # Set task to execute in users context
-                    $principal = New-ScheduledTaskPrincipal -GroupId $USERS_GROUP_SID -Id "Author"
+                    $principal = New-ScheduledTaskPrincipal -GroupId $UsersGroupSid -Id "Author"
                     # Set task to call the vbscript helper and pass the PowerShell script as argument
                     $wscriptPath = Join-Path -Path $env:SystemRoot -ChildPath "System32\wscript.exe"
                     $action = New-ScheduledTaskAction -Execute $wscriptPath -Argument "`"$vbsSavePath`" `"$ScriptSavePath`""
@@ -796,7 +799,7 @@ try {
                         $successCount++
                     }
                     else {
-                        New-PrinterMapping -PrinterName $mapping.PrinterName -PrinterPath $mapping.Path -Default $mapping.Default
+                        New-PrinterMapping -PrinterName $mapping.PrinterName -PrinterPath $mapping.Path -PrinterDefault $mapping.Default
                         $successCount++
                     }
                 }
@@ -846,8 +849,8 @@ try {
         
         # Ensure mapped drives have persistent flag set in registry
         if ($ObjectType -eq "Drive" -and $TargetUserMappings.Count -gt 0) {
-            foreach ($letter in $TargetUserMappings.Letter) {
-                $regPath = "HKCU:\Network\$letter"
+            foreach ($DriveLetter in $TargetUserMappings.Letter) {
+                $regPath = "HKCU:\Network\$DriveLetter"
                 if (Test-Path $regPath) {
                     $null = New-ItemProperty -Path $regPath -Name ConnectionType -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue
                 }
@@ -870,7 +873,7 @@ finally {
     $WhatIfPreference = $script:OriginalWhatIfPreference
     
     # End logging and collect logs from memory
-    $Log = Invoke-TboneLog -Mode Stop
+    $Log = Invoke-TboneLog -LogMode Stop
     
     # Return results and exit code (only for SYSTEM context running as Intune remediation)
     if ($RunningAsSystem) {
@@ -890,3 +893,4 @@ finally {
     }
 }
 #endregion
+

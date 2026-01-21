@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        2.0.1
+.VERSION        2.0.0
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16bd
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -11,7 +11,6 @@
     1.1 2021-10-04 Added logging to eventlog
     1.2 2021-10-05 Added detection mode to run as remediation script
     2.0.0 2026-01-20 Major update with updated functions, logic and error handling
-    2.0.1 2026-01-21 Fix some syntax and added script parameters logname and logeventids
 #>
 
 <#
@@ -893,4 +892,3 @@ finally {
     }
 }
 #endregion
-
