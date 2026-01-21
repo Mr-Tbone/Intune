@@ -33,7 +33,8 @@ This script connects to Entra ID with the Microsoft Graph module
 Then assign the listed Microsoft Graph API permissions to the specified Managed Identity.
 
 ## [Intune - Drive Mapping.ps1](Intune - Drive Mapping.ps1)
-Renamed to Remediation-MapDrivesCloudNative.ps1 and moved to remediations folder
+> [!IMPORTANT]
+> Important calloutRenamed to Remediation-MapDrivesCloudNative.ps1 and moved to remediations folder
 This script will map drives and printers for cloud native devices
 It can be used as both script and remediation script in Intune.
 I prefer to use it as a remediation script to be able to update with new versions.
@@ -45,7 +46,8 @@ The scheduled task executes on logon and network connection events to map drives
 Group memberships are queried via LDAP to determine which mappings apply to the user.
 
 ## [Intune - Printer Mapping.ps1](Intune - Printer Mapping.ps1)
-Renamed to Remediation-MapPrintersCloudNative.ps1 and moved to remediations folder
+> [!IMPORTANT]
+> Important calloutRenamed to Remediation-MapPrintersCloudNative.ps1 and moved to remediations folder
 This script will map drives and printers for cloud native devices
 It can be used as both script and remediation script in Intune.
 I prefer to use it as a remediation script to be able to update with new versions.
