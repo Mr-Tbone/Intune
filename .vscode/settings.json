@@ -1,0 +1,83 @@
+{
+  // Copilot Auto-Approvals
+  "chat.tools.terminal.autoApprove": true,
+  "chat.tools.run.autoApprove": true,
+  "chat.tools.file.autoApprove": true,
+  "chat.tools.edit.autoApprove": true,
+  "chat.editing.alwaysSaveWithGeneratedChanges": true,
+  "chat.editing.confirmEditRequestRemoval": false,
+  "chat.experimental.autoSendToBackground": "on",
+  
+  // Context Always Allow
+  "chat.participant.privateGithubCopilot.context.file": "always",
+  "chat.participant.privateGithubCopilot.context.folder": "always",
+  "chat.participant.privateGithubCopilot.context.symbol": "always",
+  "chat.participant.privateGithubCopilot.context.search": "always",
+  
+  // File Operations - No Confirmations
+  "explorer.confirmDelete": false,
+  "explorer.confirmDragAndDrop": false,
+  "explorer.confirmPasteNative": false,
+  
+  // Auto-Save
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 500,
+  "files.hotExit": "onExitAndWindowClose",
+  
+  // Git - No Confirmations
+  "git.confirmSync": false,
+  "git.enableSmartCommit": true,
+  "git.confirmEmptyCommits": false,
+  "git.confirmNoVerifyCommit": false,
+  "git.confirmForcePush": false,
+  
+  // PowerShell - No Prompts
+  "powershell.integratedConsole.suppressStartupBanner": true,
+  "powershell.codeFormatting.autoCorrectAliases": false,
+  "powershell.promptToUpdatePowerShell": false,
+  "powershell.startAsLoginShell.osx": false,
+  
+  // Terminal - No Confirmations
+  "terminal.integrated.confirmOnExit": "never",
+  "terminal.integrated.confirmOnKill": "never",
+  
+  // Debug - No Confirmations
+  "debug.confirmOnExit": "never",
+  "debug.allowBreakpointsEverywhere": true,
+  
+  // Task - No Prompts
+  "task.problemMatchers.neverPrompt": true,
+  "task.quickOpen.skip": true,
+  
+  // Security - Minimal Prompts
+  "security.workspace.trust.untrustedFiles": "open",
+  "security.workspace.trust.banner": "never",
+  "security.workspace.trust.startupPrompt": "never",
+  "security.promptForLocalFileProtocolHandling": false,
+  "security.promptForRemoteFileProtocolHandling": false,
+  
+  // SCM
+  "scm.defaultViewMode": "tree",
+  "scm.autoReveal": false,
+  
+  // Notebooks - No Confirmations
+  "notebook.confirmDeleteRunningCell": false,
+  "notebook.confirmDeleteCell": false,
+  
+  // Extensions
+  "extensions.ignoreRecommendations": true,
+  
+  // Diff Editor
+  "diffEditor.ignoreTrimWhitespace": true,
+  
+  // GitHub Copilot
+  "github.copilot.enable": {
+    "*": true,
+    "yaml": true,
+    "plaintext": true,
+    "markdown": true,
+    "powershell": true
+  },
+  "github.copilot.editor.enableAutoCompletions": true,
+  "github.copilot.renameSuggestions.triggerAutomatically": true
+}
