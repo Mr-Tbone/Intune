@@ -188,7 +188,7 @@ function Detect-TPMEvent1808 {
     Author:  @MrTbone_se (T-bone Granheden)
 #>
     try {
-        $latest = Get-WinEvent -FilterHashtable @{LogName='System';ProviderName='TPM-WMI';ID=1808} -MaxEvents 1 -EA SilentlyContinue
+        $latest = Get-WinEvent -FilterHashtable @{LogName='System';ProviderName='Microsoft-Windows-TPM-WMI';ID=1808} -MaxEvents 1 -EA SilentlyContinue
         if ($latest) { Write-Host "[OK]TPM Event 1808 found ($($latest.TimeCreated))" }
         else { Write-Warning "[INFO]TPM Event 1808 not found" }
     } catch { Write-Warning "[INFO]TPM Event 1808 query failed: $_" }
