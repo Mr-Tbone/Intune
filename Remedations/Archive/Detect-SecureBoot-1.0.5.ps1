@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        1.1.0
+.VERSION        1.0.5
 .GUID           feedbeef-beef-4dad-beef-88c9893120b1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -13,7 +13,6 @@
     1.0.3 2026-01-28 Improved error handling with -ErrorAction SilentlyContinue for WMI/CIM cmdlets
     1.0.4 2026-01-28 Patch the detectionss to not generate hard fails
     1.0.5 2026-01-28 Improved firmware type detection using PEFirmwareType registry value
-    1.1.0 2026-01-29 Minor update to the diagnostic collection. Getting more details
 #>
 
 <#

@@ -37,3 +37,4 @@ When run as SYSTEM (via Intune), it creates a scheduled task that runs as the lo
 The scheduled task executes on logon and network connection events to map drives/printers.
 Group memberships are queried via LDAP to determine which mappings apply to the user.
 
+
