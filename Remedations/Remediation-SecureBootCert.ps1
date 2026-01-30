@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        2.0.0
+.VERSION        2.0.1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-85924e86a608
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -16,6 +16,7 @@
     1.0.6 2026-01-28 Added comprehensive system diagnostics for troubleshooting failed or non-compliant devices
     1.0.7 2026-01-28 Fixed $isElevated variable definition for proper output gating in finally block
     2.0.0 2026-01-30 Major update to collect diagnostics better and faster
+    2.0.1 2026-01-30 Fixed scriptmode detection
 #>
 
 <#
@@ -89,9 +90,9 @@ $AvailableUpdateFlags = @{
 #endregion
 #region ---------------------------------------------------[Set global script settings]--------------------------------------------
 [string]$ExecutionMode = switch -Wildcard (Split-Path $PSCommandPath -Leaf) {
-    "DetectionScript*"      { "Detection"; break }      # Script running as detection script
-    "RemediationScript*"    { "Remediation"; break }    # Script running as remediation script
-    default                 { "Standalone" }            # Script running standalone
+    "*Detect*"      { "Detection"; break }      # Script running as detection script
+    "*remediate*"   { "Remediation"; break }    # Script running as remediation script
+    default         { "Standalone" }            # Script running standalone
 }
 $AllCompliant   = $true                                                     # Assume compliant until a check fails
 #endregion
@@ -458,4 +459,5 @@ finally {
     }
 }
 #endregion
+
 

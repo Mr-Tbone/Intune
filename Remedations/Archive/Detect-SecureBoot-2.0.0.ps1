@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        2.0.1
+.VERSION        2.0.0
 .GUID           feedbeef-beef-4dad-beef-88c9893120b1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -15,7 +15,6 @@
     1.0.5 2026-01-28 Improved firmware type detection using PEFirmwareType registry value
     1.1.0 2026-01-29 Minor update to the diagnostic collection. Getting more details
     2.0.0 2026-01-30 Major update to collect diagnostics better and faster
-    2.0.1 2026-01-30 Fixed scriptmode detection
 #>
 
 <#
@@ -388,5 +387,4 @@ finally {
     }
 }
 #endregion
-
 
