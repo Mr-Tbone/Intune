@@ -1,31 +1,29 @@
 <#PSScriptInfo
-.VERSION        2.0.0
+.VERSION        1.1.0
+.GUID           feedbeef-beef-4dad-beef-88c9893120b1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
-.GUID           feedbeef-beef-4dad-beef-85924e86a608
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
 .TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
 .LICENSEURI     https://opensource.org/licenses/MIT
 .PROJECTURI     https://github.com/Mr-Tbone/Intune
 .RELEASENOTES
     1.0.0 2026-01-08 Initial Build
-    1.0.1 2026-01-09 Patch Remediate Secure Boot Certificates
-    1.0.2 2026-01-09 fix redundant reg read
-    1.0.3 2026-01-14 fix detection bugs
-    1.0.4 2026-01-20 Fixed a syntax error
-    1.0.5 2026-01-28 Changed AvailableUpdates to 0x340 to include DB, Boot Manager, and SVN updates
-    1.0.6 2026-01-28 Added comprehensive system diagnostics for troubleshooting failed or non-compliant devices
-    1.0.7 2026-01-28 Fixed $isElevated variable definition for proper output gating in finally block
-    2.0.0 2026-01-30 Major update to collect diagnostics better and faster
+    1.0.1 2026-01-09 Fixed header to comply with best practice
+    1.0.2 2026-01-09 Patch Remediate Secure Boot Certificates
+    1.0.3 2026-01-28 Improved error handling with -ErrorAction SilentlyContinue for WMI/CIM cmdlets
+    1.0.4 2026-01-28 Patch the detectionss to not generate hard fails
+    1.0.5 2026-01-28 Improved firmware type detection using PEFirmwareType registry value
+    1.1.0 2026-01-29 Minor update to the diagnostic collection. Getting more details
 #>
 
 <#
 .SYNOPSIS
-    Script for Intune Remediation to both detect and remediate if Secure Boot Certificate is old and need to be updated to Secure Boot CA 2023
- 
+    Script for Intune remediation to detect if Secure Boot is enabled
+
 .DESCRIPTION
-    The script detects and remediates regkeys and other settings required for Secure Boot CA 2023 certificate to be deployed.
-    The script is both for detect and remediate and can self detect if running as detect or remediate based the Intune assigned scriptname
-    The script invoke logging in the start and send the logs to Intune after it is done. It will also save a log on disk for troubleshooting.
+    The script detects if Secure Boot is enabled on the device and also collects diagnostic info on the device.
+    Returns Compliant (exit 0) if enabled, Non-Compliant (exit 1) if disabled or not supported.
+    The compact function invoke-TboneTinyLog is used to capture logs and return them to Intune and disk for troubleshooting.
 
 .NOTES
     Please feel free to use this, but make sure to credit @MrTbone_se as the original author
@@ -35,16 +33,8 @@
 #>
 
 #region ---------------------------------------------------[Modifiable Parameters and Defaults]------------------------------------
-$ScriptName = "Remediate Secure Boot Certificate"                           # Name of the script (Used for log file name)
+$ScriptName = "Detect Secure Boot"                                          # Name of the script (Used for log file name)
 $LogPath    = "$env:ProgramData\Microsoft\IntuneManagementExtension\Logs"   # Path to save logs (Default Intune log path)
-
-# Registry key to SET for triggering update (remediate mode)
-# 0x340 is a binary combination of 0x40 (DB update) + 0x100 (Boot Manager update) + 0x200 (SVN firmware update)
-# 0x5944 is a binary combination to update ALL. It is required by some devices but also more larger risk of failures
-$registrySettingsRemediate = @(
-    @{ Path = "HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot"; Key = "AvailableUpdates"; Value = 0x340; Type = "DWord" }
-)
-$RemediateTaskName = "\Microsoft\Windows\PI\Secure-Boot-Update"
 # Registry keys to READ for diagnosticsi (Most set by Windows and should not be changed)
 $registryKeysStatus = @(
     @{ Path = "HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing"; Key = "UEFICA2023Status";         Description = "Update status";  ExpectedValue = "Updated" }
@@ -356,72 +346,10 @@ try {
         $diagnostics = Get-SecureBootDiagnostics -registryKeys $registryKeysStatus -OSversions $OSversions
 
         # Use Diagnostics to determine the state and if remediation is needed
-        if ($diagnostics -and $diagnostics.SecureBootEnabled) {
-            # Determine state based on registry key value in UEFICA2023Status
-            switch ($diagnostics.'Reg:UEFICA2023Status') {
-                "Updated" { 
-                    # Updated and ready state
-                    if ($diagnostics.'Reg:WindowsUEFICA2023Capable' -eq '0x2') {
-                        Write-Host "Secure Boot CA 2023 update complete: (Status=$($diagnostics.'Reg:UEFICA2023Status'), Capable=$($diagnostics.'Reg:WindowsUEFICA2023Capable'))"
-                        $AllCompliant = $true 
-                    } 
-                    # Updated but invalid state
-                    else {
-                        Write-Warning "Secure Boot in unexpected state: Status=$($diagnostics.'Reg:UEFICA2023Status') but Capable=$($diagnostics.'Reg:WindowsUEFICA2023Capable') (expected 2)"
-                        $AllCompliant = $false
-                    }
-                }
-                "InProgress" { 
-                    # in-progress and waiting for reboot
-                    if (($diagnostics.'Reg:AvailableUpdates' -band 0x4100) -eq 0x4100) {
-                        Write-Warning "BootMgr stage pending reboot (AvailableUpdates=$($diagnostics.'Reg:AvailableUpdates'))."
-                        $AllCompliant = $true 
-                    } 
-                    # in-progress and waiting for other tasks
-                    else {
-                        Write-Host "Update in progress (AvailableUpdates=$($diagnostics.'Reg:AvailableUpdates'))."
-                        $AllCompliant = $true 
-                    }
-                }
-                "NotStarted" {
-                    # If trigger AvailableUpdates already set correct, let keep it compliant and let the system update
-                    if (($diagnostics.'Reg:AvailableUpdates' -band $registrySettingsRemediate[0].Value) -eq $registrySettingsRemediate[0].Value) {
-                        Write-Host "Trigger present (AvailableUpdates=$($diagnostics.'Reg:AvailableUpdates')). waiting for task or reboot."
-                        $AllCompliant = $true 
-                    }
-                    # If running in Remediation, set the trigger AvailableUpdates and start schedule task
-                    elseif ($ExecutionMode -eq 'Remediation') {
-                        try {
-                            # Set trigger AvailableUpdates in registry
-                            try{
-                                Set-ItemProperty -Path $registrySettingsRemediate[0].Path -Name $registrySettingsRemediate[0].Key -Value $registrySettingsRemediate[0].Value -Type $registrySettingsRemediate[0].Type
-                                Write-Host "Secure Boot Registry AvailableUpdates set to $($registrySettingsRemediate[0].Value)"
-                            }catch {Write-Error "Failed to set registry trigger: $_"}
-                            # Start the scheduled task to trigger the process
-                            try {
-                                Start-ScheduledTask -TaskName "$RemediateTaskName"
-                                Write-Host 'Secure Boot update Schedule Task triggered. A reboot may be required.'
-                            } catch {Write-Error "Secure Boot update Schedule Task Failed to start: $_"}
-                            $AllCompliant = $true
-                        }
-                        Catch {
-                            Write-Error "Remediation failed with error: $_"
-                            $AllCompliant = $false
-                        }
-                    } 
-                    # If Running in detect mode, only report Non compliant
-                    else {
-                        Write-Warning "Update not started UEFICA2023Status=$($diagnostics.'Reg:UEFICA2023Status') and trigger AvailableUpdates=$($diagnostics.'Reg:AvailableUpdates') - needs remediation."
-                        $AllCompliant = $false
-                    }
-                }
-                # catch if UEFICA2023Status has any other unknown states
-                default {
-                        Write-Warning "Unknown State: UEFICA2023Status=$($diagnostics.'Reg:UEFICA2023Status') AvailableUpdates=$($diagnostics.'Reg:AvailableUpdates'), needs investigation."
-                        $AllCompliant = $false
-                    }
-                }
-            }
+        if ($diagnostics -and $diagnostics.SecureBootEnabled -eq "Enabled") {
+            Write-Host "Secure Boot is Enabled"
+            $AllCompliant = $true
+        }
         else {
             Write-Warning "Secure Boot is disabled - cannot proceed with CA 2023 update"
             $AllCompliant = $false
@@ -458,4 +386,3 @@ finally {
     }
 }
 #endregion
-

@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        2.0.0
+.VERSION        1.0.7
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-85924e86a608
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -15,7 +15,6 @@
     1.0.5 2026-01-28 Changed AvailableUpdates to 0x340 to include DB, Boot Manager, and SVN updates
     1.0.6 2026-01-28 Added comprehensive system diagnostics for troubleshooting failed or non-compliant devices
     1.0.7 2026-01-28 Fixed $isElevated variable definition for proper output gating in finally block
-    2.0.0 2026-01-30 Major update to collect diagnostics better and faster
 #>
 
 <#
@@ -458,4 +457,3 @@ finally {
     }
 }
 #endregion
-
