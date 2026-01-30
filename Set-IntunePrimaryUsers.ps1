@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        7.1.0
+.VERSION        7.1.1
 .GUID           feedbeef-beef-4dad-beef-000000000001
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -30,6 +30,7 @@
     7.0.2 2026-01-09 Fixed header to comply with best practice
     7.0.3 2026-01-19 Fixed small bugs and syntax errors
     7.1.0 2026-01-21 Minor update to logging module and a lot of variable naming changes
+    7.1.1 2026-01-30 Fixed missing $SignInsStartTime
 #>
 
 <#
@@ -231,6 +232,8 @@ if([string]::IsNullOrWhiteSpace($ReportTitle)) {[string]$ReportTitle = $ScriptAc
 [scriptblock]$AddReport = {param($Target,$OldValue,$NewValue,$Action,$Details)              # Small inline function to add report entries
     if(-not $ReportResults.ContainsKey($Action)){$ReportResults[$Action]=[System.Collections.ArrayList]::new()}
     $null=$ReportResults[$Action].Add([PSCustomObject]@{Target=$Target;OldValue=$OldValue;NewValue=$NewValue;Action=$Action;Details=$Details})}
+# Data collection variables - initialized dynamically during script execution
+[datetime]$SignInsStartTime = (Get-Date).AddDays(-$SigninsTimeSpan) # Sign-in logs start time    
 #endregion
 
 #region ---------------------------------------------------[Functions]------------------------------------------------------------
@@ -1919,4 +1922,5 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
