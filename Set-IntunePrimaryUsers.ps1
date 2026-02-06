@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        7.1.1
+.VERSION        7.3.0
 .GUID           feedbeef-beef-4dad-beef-000000000001
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -31,6 +31,8 @@
     7.0.3 2026-01-19 Fixed small bugs and syntax errors
     7.1.0 2026-01-21 Minor update to logging module and a lot of variable naming changes
     7.1.1 2026-01-30 Fixed missing $SignInsStartTime
+    7.2.0 2026-02-06 Fixed skip token expiration issue with automatic query restart and deduplication
+    7.3.0 2026-02-06 Minor update to support skip token that break graph requests early
 #>
 
 <#
@@ -565,14 +567,16 @@ function Invoke-MgGraphRequestSingle {
 .DESCRIPTION
     Makes Graph API calls using Invoke-MgGraphRequest but add automatic pagination, throttling handling, and exponential backoff retry logic.
     Supports filtering, property selection, and count queries. Returns all pages of results automatically.
+    Handles skip token expiration by restarting query with smaller page size and deduplication.
 .NOTES
     Author:  @MrTbone_se (T-bone Granheden)
-    Version: 2.1
+    Version: 2.2
     
     Version History:
     1.0 - Initial version
     2.0 - Fixed some small bugs with throttling handling
     2.1 - Added more error handling for Post/Patch methods
+    2.2 - Added skip token expiration recovery with automatic restart and deduplication
 #>
 [CmdletBinding()]
     Param(
@@ -597,9 +601,9 @@ function Invoke-MgGraphRequestSingle {
         [Parameter(                 HelpMessage = "Graph API filters to apply")]
         [string]$GraphFilters,
     
-        [Parameter(                 HelpMessage = "Page size (Default is the maximum 1000 objects per page)")]
+        [Parameter(                 HelpMessage = "Page size (Default is 500 for better stability)")]
         [ValidateRange(1,1000)]
-        [int]$GraphPageSize          = 999,
+        [int]$GraphPageSize          = 500,
 
         [Parameter(                 HelpMessage = "Skip pagination and only get the first page. (Default is false)")]
         [bool]$GraphSkipPagination   = $false,
@@ -623,6 +627,10 @@ function Invoke-MgGraphRequestSingle {
         [int]$RetryCount = 0
         [string]$Uri = "https://graph.microsoft.com/$GraphRunProfile/$GraphObject"
         [System.Collections.ArrayList]$GraphQueryParams = [System.Collections.ArrayList]::new()
+        
+        # Skip token recovery variables (only used if needed)
+        [string]$BaseUri = $Uri
+        [System.Collections.Generic.HashSet[string]]$SeenIds = $null
 
         # Add Count parameter to Query if requested
         if ($GraphCount) {[void]$GraphQueryParams.Add("`$count=true")}
@@ -681,17 +689,43 @@ function Invoke-MgGraphRequestSingle {
                     catch {
                         # Check if this is an expired skip token error
                         if ($_.Exception.Message -match "Skip token.*expired|Skip token is null") {
-                            Write-Warning "Skip token has expired on page $I after collecting $($PsobjectResults.Count) items. Returning collected data."
-                            # Exit pagination loop and return what we have
-                            $Uri = $null
+                            Write-Warning "Skip token expired at page $I after $($PsobjectResults.Count) items. Restarting..."
+                            
+                            # Initialize deduplication on first skip token failure
+                            if ($null -eq $SeenIds) {
+                                $SeenIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                                $PsobjectResults | Where-Object {$_.id} | ForEach-Object {[void]$SeenIds.Add($_.id)}
+                            }
+                            
+                            # Reduce page size and rebuild URI
+                            $GraphPageSize = [Math]::Max([int]($GraphPageSize / 2), 100)
+                            $GraphQueryParams.Clear()
+                            if ($GraphCount) {[void]$GraphQueryParams.Add("`$count=true")}
+                            if ($GraphMethod -eq 'GET') {[void]$GraphQueryParams.Add("`$top=$GraphPageSize")}
+                            if ($GraphProperties) {[void]$GraphQueryParams.Add("`$select=$($GraphProperties -join ',')")}
+                            if ($GraphFilters) {[void]$GraphQueryParams.Add("`$filter=$([System.Web.HttpUtility]::UrlEncode($GraphFilters))")}
+                            $Uri = $BaseUri + "?" + ($GraphQueryParams -join '&')
                             break
                         }
-                        # For other errors, log and re-throw to outer catch
                         Write-Verbose "Request failed with error: $($_.Exception.Message)"
                         throw
                     }
                     if ($GraphMethod -in 'POST', 'PATCH', 'DELETE') {return $Response}
-                    if ($Response.value) {[void]$PsobjectResults.AddRange($Response.value)}
+                    
+                    # Add items (with deduplication if skip token recovery active)
+                    if ($Response.value) {
+                        if ($SeenIds) {
+                            foreach ($item in $Response.value) {
+                                if ($item.id -and -not $SeenIds.Contains($item.id)) {
+                                    [void]$PsobjectResults.Add($item)
+                                    [void]$SeenIds.Add($item.id)
+                                }
+                            }
+                        } else {
+                            [void]$PsobjectResults.AddRange($Response.value)
+                        }
+                    }
+                    
                     # Capture count from first response if requested
                     if ($GraphCount -and $null -eq $TotalCount -and $Response.'@odata.count') {
                         $TotalCount = $Response.'@odata.count'
@@ -773,8 +807,9 @@ function Invoke-MgGraphRequestSingle {
                             throw "$ErrorMessage (Object Deleted/No User License)"
                         }
                         {$_ -eq 400 -or $_ -eq 'BadRequest'} { # Bad Request                            
-                            if ($ErrorMessage -match "Skip token.*expired|Skip token is null" -or $FullErrorString -match "Skip token.*expired|Skip token is null") {# Check if this is an expired skip token error
-                                Write-Warning "Skip token has expired after collecting $($PsobjectResults.Count) items. Returning collected data."
+                            if ($ErrorMessage -match "Skip token.*expired|Skip token is null" -or $FullErrorString -match "Skip token.*expired|Skip token is null") {
+                                # Fallback - should normally be handled in inner try-catch
+                                Write-Warning "Skip token expired (outer catch fallback). Returning $($PsobjectResults.Count) items."
                                 return $PsobjectResults
                             }
                             if ($ErrorMessage -match "does not have intune license or is deleted" -or $FullErrorString -match "does not have intune license or is deleted") { # Check if no license, common for Intune queries
@@ -1922,5 +1957,6 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
 
