@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        4.1.0
+.VERSION        4.2.0
 .GUID           feedbeef-beef-4dad-beef-000000000003
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -14,6 +14,7 @@
     4.0.1 2026-01-09 Fixed Header and renamed script for clarity
     4.0.2 2026-01-09 Fixed an unused variable
     4.1.0 2026-01-21 Minor update to logging module and a lot of variable naming changes
+    4.2.0 2026-02-17 Minor change to avoid mismatch  in microsoft.graph modules
 #>
 
 <#
@@ -201,11 +202,23 @@ if($Testmode)               {$WhatIfPreference = 1}                             
 #endregion
 
 #region ---------------------------------------------------[Import Modules and Extensions]-----------------------------------------
-# Check if Microsoft.Graph.Authentication module is already loaded, if not import it silently by suppressing verbose output
+# Import Microsoft.Graph.Authentication with automatic version conflict resolution
 [string]$ModuleName = 'Microsoft.Graph.Authentication'
 if (-not (Get-Module -Name $ModuleName)) {
-    & {$VerbosePreference = 'SilentlyContinue'; Import-Module $ModuleName -ErrorAction Stop}
-} else {Write-Verbose "Module '$ModuleName' is already loaded"}
+    try { # Try normal import first
+        & {$VerbosePreference = 'SilentlyContinue'; Import-Module $ModuleName -ErrorAction Stop}
+        Write-Verbose "Imported $ModuleName v$((Get-Module -Name $ModuleName).Version)"
+    }
+    catch { # Reported bug with missmatch version. This will catch the error and try to clean up and retry the import
+        if ($_.Exception -is [System.TypeLoadException] -or $_.Exception.Message -match 'does not have an implementation') {
+            Write-Warning "Module version conflict detected - cleaning up and retrying"
+            & {$VerbosePreference = 'SilentlyContinue'; Get-Module Microsoft.Graph.* | Remove-Module -Force -ErrorAction SilentlyContinue}
+            [version]$LatestVersion = (Get-Module -Name $ModuleName -ListAvailable | Sort-Object Version -Descending | Select-Object -First 1).Version
+            & {$VerbosePreference = 'SilentlyContinue'; Import-Module $ModuleName -RequiredVersion $LatestVersion -Force -ErrorAction Stop}
+            Write-Verbose "Resolved conflict - imported $ModuleName v$LatestVersion"
+        } else {throw}
+    }
+} else {Write-Verbose "Module '$ModuleName' already loaded v$((Get-Module -Name $ModuleName).Version)"}
 #endregion
 
 #region ---------------------------------------------------[Static Variables]------------------------------------------------------
@@ -1846,4 +1859,5 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 

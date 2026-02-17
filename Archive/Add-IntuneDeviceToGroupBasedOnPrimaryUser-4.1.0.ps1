@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        4.2.0
+.VERSION        4.1.0
 .GUID           feedbeef-beef-4dad-beef-000000000002
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -14,7 +14,6 @@
     4.0.2 2026-01-09 Fixed header to comply with best practice
     4.0.3 2026-01-09 Fixed Header and renamed script for clarity
     4.1.0 2026-01-21 Minor update to logging module and a lot of variable naming changes
-    4.2.0 2026-02-17 Minor change to avoid mismatch  in microsoft.graph modules
 #>
 
 <#
@@ -1967,5 +1966,4 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
-
 
