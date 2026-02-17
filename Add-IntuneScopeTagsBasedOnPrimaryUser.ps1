@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        4.2.0
+.VERSION        4.2.1
 .GUID           feedbeef-beef-4dad-beef-000000000003
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -15,6 +15,7 @@
     4.0.2 2026-01-09 Fixed an unused variable
     4.1.0 2026-01-21 Minor update to logging module and a lot of variable naming changes
     4.2.0 2026-02-17 Minor change to avoid mismatch  in microsoft.graph modules
+    4.2.1 2026-02-17 Fix a bug in reporting function with formating issues on some regional languages
 #>
 
 <#
@@ -1303,6 +1304,7 @@ function Invoke-ScriptReport {
     1.0 - Initial version
     2.0 - Added dynamic reporting object with dynamic action counters
     2.1 - renamed parameter ActionName to ReportTitle for clarity
+    2.2 - Added %% to avoid formatting issues with percentage values
 #>
     [CmdletBinding()]
     param(
@@ -1386,11 +1388,11 @@ function Invoke-ScriptReport {
                     foreach ($Action in $ActionSummary.Keys) {
                         [int]$Count = $ActionSummary[$Action]
                         [double]$Percentage = [math]::Round(($Count / $TotalObjects) * 100, 1)
-                        Write-Output ("    {0,-30}: {1,6} ({2,5}%)" -f $Action, $Count, $Percentage)
+                        Write-Output ("    {0,-30}: {1,6} ({2,5}%%)" -f $Action, $Count, $Percentage)
                     }
                 } else {
                     foreach ($Action in $ActionSummary.Keys) {
-                        Write-Output ("    {0,-20}: {1,6} (  0.0%)" -f $Action, $ActionSummary[$Action])
+                        Write-Output ("    {0,-20}: {1,6} (  0.0%%)" -f $Action, $ActionSummary[$Action])
                     }
                 }
             }
@@ -1859,5 +1861,6 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
 

@@ -1,44 +1,44 @@
 <#PSScriptInfo
-.VERSION        4.2.1
-.GUID           feedbeef-beef-4dad-beef-000000000002
+.VERSION        4.2.0
+.GUID           feedbeef-beef-4dad-beef-000000000003
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
 .TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
 .LICENSEURI     https://opensource.org/licenses/MIT
 .PROJECTURI     https://github.com/Mr-Tbone/Intune
 .RELEASENOTES
-    1.0 2023-02-14 Initial Build
-    2.0 2021-03-01 Large update to use Graph batching and reduce runtime
-    3.0 2025-12-20 Large update to allign with other Intune scripts in same suite
+    1.0 2025-03-19 Initial Build
+    2.0 2025-11-14 Large update to use Graph batching and reduce runtime
+    3.0 2025-12-19 Added versions on functions to keep track of changes, changed name to Add-IntuneScopeTagsBasedOnPrimaryUser, comments and fixed minor bugs
     4.0.0 2025-12-23 Major update to allign all primary user scripts. Many small changes to improve performance and reliability.
-    4.0.2 2026-01-09 Fixed header to comply with best practice
-    4.0.3 2026-01-09 Fixed Header and renamed script for clarity
+    4.0.1 2026-01-09 Fixed Header and renamed script for clarity
+    4.0.2 2026-01-09 Fixed an unused variable
     4.1.0 2026-01-21 Minor update to logging module and a lot of variable naming changes
     4.2.0 2026-02-17 Minor change to avoid mismatch  in microsoft.graph modules
-    4.2.1 2026-02-17 Fix a bug in reporting function with formating issues on some regional languages
 #>
 
 <#
 .SYNOPSIS
-    Script for Intune to add device to a group based on primary user
+    Script for Intune to set Scope Tags on Device based on Primary Users and their attributes
 
 .DESCRIPTION
-    This script will get the All devices in Intune and their primary users.
-    The script then use a given attribute from the primary user (like Country, City) to add the device to a group based on that value
+    This script will get all devices and their current primary user and current scope tags
+    Get all users and the significant attribute for scope tagging
+    It will then set scope tags based on that attribute
     The script uses Ms Graph and only requires the Microsoft.Graph.Authentication module
 
 .EXAMPLE
-   .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1
-    Will add devices to groups based on primary user attributes with default settings
+   .\Add-IntuneScopeTagsBasedOnPrimaryUser.ps1
+    Will set the scope tags on devices in Intune based on primary users and their attributes with default settings
 
 .EXAMPLE
-    .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1 -OperatingSystems All -DetailedReport $true -ReportToDisk $true -ReportPath "C:\Reports"
-    Will add devices to groups based on primary user attributes for all devices and return a detailed report to disk.
+    .\Add-IntuneScopeTagsBasedOnPrimaryUser.ps1 -MappingAttribute country -OperatingSystems All -ReportDetailed $true -ReportToDisk $true -ReportToDiskPath "C:\Reports"
+    Will set the scope tags on devices in Intune based on primary users and their attribute country for all devices and return a detailed report to disk
 
 .EXAMPLE
-    .\Add-IntuneDeviceToGroupBasedOnPrimaryUser.ps1 -OperatingSystems Windows -MappingAttribute "Country"
-    Will add devices to groups based on primary user attribute "country" for Windows devices.
-    
+    .\Add-IntuneScopeTagsBasedOnPrimaryUser.ps1 -OperatingSystems Windows -MappingAttribute "Country"
+    Will set the scope tags on devices in Intune based on primary user attribute "country" for Windows devices.
+
 .NOTES
     Please feel free to use this, but make sure to credit @MrTbone_se as the original author
 
@@ -56,14 +56,17 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory = $false,          HelpMessage = "Name of the script action for logging.")]
-    [string]$ScriptActionName       = "Intune add device to group based on primary user",
+    [string]$ScriptActionName       = "Intune Set Scope Tags based on Primary User",
 
     [Parameter(Mandatory = $false,          HelpMessage = "Device operatingsystems to process ('All', 'Windows', 'Android', 'iOS', 'macOS'). Default is 'Windows'")]
     [ValidateSet('All', 'Windows', 'Android', 'iOS', 'macOS')]
     [string[]]$OperatingSystems     = @('Windows'),
 
-    [Parameter(Mandatory = $false,          HelpMessage = "Attribute to use for the mapping. Default is 'Country'")]
-    [string]$MappingAttribute       = "Country",
+    [Parameter(Mandatory = $false,          HelpMessage = "Attribute to use for the scope tag. Default is 'Country'")]
+    [string]$MappingAttribute      = "Country",
+
+    [Parameter(Mandatory = $false,          HelpMessage = "Whether to keep the built-in scope tag (usually called Default). Default is true")]
+    [bool]$KeepBuiltinTag           = $true,
             
     [Parameter(Mandatory = $false,          HelpMessage = "Filter Intune only managed devices (true) or also include Co-managed devices (false). Default is true")]
     [bool]$IntuneOnly               = $true,
@@ -158,24 +161,24 @@ param(
 #endregion
 
 #region ---------------------------------------------------[Modifiable Variables and defaults]------------------------------------
-# Define User attribute to map by this table
-$MappingAttributeTable = @{  
-    'Sweden'            = 'Intune All Devices SE'
-    'Germany'           = 'Intune All Devices DE'
-    'France'            = 'Intune All Devices FR'
-    'Poland'            = 'Intune All Devices PL'
-    'United States'     = 'Intune All Devices US'
-    'China'             = 'Intune All Devices CN'
-    'Republic of Korea' = 'Intune All Devices KR'
-    'Japan'             = 'Intune All Devices JP'
-    'India'             = 'Intune All Devices IN'
+# Define User attribute to scope tags mapping by table
+$MappingAttributeTable = @{
+#   User attribute Value= Scope Tag Name    
+    'Sweden'            = 'SE'
+    'Germany'           = 'DE'
+    'France'            = 'FR'
+    'Poland'            = 'PL'
+    'United States'     = 'US'
+    'China'             = 'CN'
+    'Republic of Korea' = 'KR'
+    'Japan'             = 'JP'
+    'India'             = 'IN'
 }
 # ==========> Authentication (Invoke-ConnectMgGraph) <=================================================================
 [System.Collections.ArrayList]$RequiredScopes = @(  # Required Graph API permission scopes used in function Invoke-ConnectMgGraph
-    "DeviceManagementManagedDevices.Read.All",      # Read Intune devices
-    "Device.Read.All",                              # Read Entra devices
-    "User.Read.All",                                # Read users
-    "GroupMember.ReadWrite.All"                     # Read groups, members, add/remove members
+    "DeviceManagementManagedDevices.ReadWrite.All", # Read/write Intune device to set scope tags
+    "DeviceManagementRBAC.Read.All",                # Read scope tags
+    "User.Read.All"                                 # Read users
 )
 #endregion
 
@@ -1476,6 +1479,7 @@ function Invoke-ScriptReport {
         Write-Verbose "Function finished. Memory usage: $MemoryUsage MB"
     }
 }
+#endregion
 
 #region ---------------------------------------------------[[Script Execution]------------------------------------------------------
 # Start T-Bone custom logging (can be removed if you don't want to use T-Bone logging)
@@ -1562,7 +1566,7 @@ try {
     # Get all users from Graph
     try {
         # List properties to retrieve
-        [string]$GraphProperties = "id,userPrincipalName,$($MappingAttribute)"
+        [string]$GraphProperties = "id,userPrincipalName,$MappingAttribute"
         # Prepare filters
         [string]$GraphFilterString = $null
         # Get graph objects with single call
@@ -1577,6 +1581,7 @@ try {
 
         # Initialize hashtables
         $AllUsersByIdHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
+        $AllUsersByUPNHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
         # Verify if objects were found
         if ($AllUsers -and $AllUsers.Count -gt 0) {
             Write-Verbose "Successfully retrieved $($AllUsers.Count) users from Graph API"
@@ -1593,218 +1598,100 @@ try {
         throw
     }
 
-    # Get Entra devices
+    # Get all devices one by one in batch to get their scope tags
     try {
         # List properties to retrieve
-        [string]$GraphProperties = 'id,deviceId'
-        # Get graph objects with single call
-        $AllEntraDevices = Invoke-MgGraphRequestSingle `
-            -GraphRunProfile 'v1.0' `
+        [string]$GraphProperties = 'id,deviceName,operatingSystem,AzureAdDeviceId,userId,roleScopeTagIds'
+        # Prepare filters
+        [string]$GraphFilterString = $null
+        # Get graph objects using batch
+        $AllDevicesWithTags = Invoke-MgGraphRequestBatch `
+            -GraphRunProfile 'beta' `
             -GraphMethod 'GET' `
-            -GraphObject 'devices' `
+            -GraphObject 'deviceManagement/managedDevices' `
+            -GraphObjects $AllDevices `
+            -GraphQuery  ''`
             -GraphProperties $GraphProperties `
+            -GraphFilters $GraphFilterString `
+            -GraphBatchSize $GraphBatchSize `
+            -GraphWaitTime $GraphWaitTime `
+            -GraphMaxRetry $GraphMaxRetry 
+
+        # Initialize hashtables
+        $AllDevicesWithTagsByDeviceIdHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
+        $AllDevicesWithTagsByUserIdHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
+        # Verify if objects were found
+        if ($AllDevicesWithTags -and $AllDevicesWithTags.Count -gt 0) {
+            Write-Verbose "Successfully retrieved $($AllDevicesWithTags.Count) devices with scope tags from Graph API Batching"
+            # Create hashtable for fast lookups
+            $AllDevicesWithTagsHash = Convert-PSObjectArrayToHashTables -PSObjectArray $AllDevicesWithTags -IdProperties @('id','userId')
+            $AllDevicesWithTagsByDeviceIdHash = $AllDevicesWithTagsHash['id']
+            $AllDevicesWithTagsByUserIdHash = $AllDevicesWithTagsHash['userId']
+            Write-Verbose "Created device lookup hashtables: Id=$($AllDevicesWithTagsByDeviceIdHash.Count) entries, userId=$($AllDevicesWithTagsByUserIdHash.Count) entries"
+        }
+        else {
+            Write-Warning "No devices with scope tags found in tenant"
+        }
+    }
+    catch {
+        Write-Error "Failed to get devices and their scope tags: $($_.Exception.Message)"
+        throw
+    }
+    # Cleanup unused variable to save memory
+    Remove-Variable -Name AllDevices
+
+    # Get all scope tags 
+    try {
+        # List properties to retrieve
+        [string]$GraphProperties = 'id,displayName,description,isBuiltIn'
+        # Prepare filters
+        [string]$GraphFilterString = $null
+        # Get graph objects
+        $AllScopeTags = Invoke-MgGraphRequestSingle `
+            -GraphRunProfile 'beta' `
+            -GraphMethod 'GET' `
+            -GraphObject 'deviceManagement/roleScopeTags' `
+            -GraphProperties $GraphProperties `
+            -GraphFilters $GraphFilterString `
             -GraphMaxRetry $GraphMaxRetry `
             -GraphWaitTime $GraphWaitTime
 
-        # Initialize hashtable for deviceId to directory object id mapping
-        $EntraDeviceObjectIdByDeviceId = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        # Initialize hashtables
+        $AllScopeTagByIdHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
+        $AllScopeTagByDisplayNameHash = [System.Collections.Generic.Dictionary[string,object]]::new(0, [System.StringComparer]::OrdinalIgnoreCase)
         # Verify if objects were found
-        if ($AllEntraDevices -and $AllEntraDevices.Count -gt 0) {
-            Write-Verbose "Successfully retrieved $($AllEntraDevices.Count) Entra devices from Graph API"
-            # Create hashtable for fast lookups (deviceId -> directory object id)
-            foreach ($entraDevice in $AllEntraDevices) {
-                if ($entraDevice.deviceId -and $entraDevice.id) {
-                    $EntraDeviceObjectIdByDeviceId[$entraDevice.deviceId] = $entraDevice.id
-                }
-            }
-            Write-Verbose "Created Entra device lookup hashtable: $($EntraDeviceObjectIdByDeviceId.Count) entries"
+        if ($AllScopeTags -and $AllScopeTags.Count -gt 0) {
+            Write-Verbose "Successfully retrieved $($AllScopeTags.Count) scope tags from Graph API"
+            # Create hashtable for fast lookups
+            $AllScopeTagHash = Convert-PSObjectArrayToHashTables -PSObjectArray $AllScopeTags -IdProperties @('id','displayName')
+            $AllScopeTagByIdHash = $AllScopeTagHash['id']
+            $AllScopeTagByDisplayNameHash = $AllScopeTagHash['displayName']
+            Write-Verbose "Created scope tag lookup hashtable: ID=$($AllScopeTagByIdHash.Count) entries, DisplayName=$($AllScopeTagByDisplayNameHash.Count) entries"
         }
-        else {Write-Warning "No Entra devices found in tenant"}
+        else {Write-Warning "No scope tags found in tenant"}
     }
     catch {
-        Write-Error "Failed to get Entra devices: $($_.Exception.Message)"
+        Write-Error "Failed to get scope tags: $($_.Exception.Message)"
         throw
     }
 
-    # Get the groups defined in mapping (supports both GUIDs and display names)
-    try {
-        # Extract unique group identifiers from the mapping
-        [array]$targetGroupIdentifiers = $MappingAttributeTable.Values | Select-Object -Unique
-        
-        # Initialize hashtables for group lookups
-        $AllGroupsByDisplayNameHash = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        $AllGroupsByIdHash = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        $GroupMembersByGroupIdHash = [System.Collections.Generic.Dictionary[string,System.Collections.Generic.HashSet[string]]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        [System.Collections.Generic.List[PSObject]]$AllGroups = [System.Collections.Generic.List[PSObject]]::new()
-        
-        if (-not $targetGroupIdentifiers -or $targetGroupIdentifiers.Count -eq 0) {
-            Write-Warning "No group identifiers found in MappingAttributeTable - skipping group retrieval"
-        }
-        else {
-            # Separate GUIDs from display names using regex pattern
-            [string]$GuidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-            [System.Collections.Generic.List[string]]$GroupGuids = [System.Collections.Generic.List[string]]::new()
-            [System.Collections.Generic.List[string]]$GroupNames = [System.Collections.Generic.List[string]]::new()
-            foreach ($identifier in $targetGroupIdentifiers) {
-                if ($identifier -match $GuidPattern) { $GroupGuids.Add($identifier) }
-                else { $GroupNames.Add($identifier) }
-            }
-            # List properties to retrieve
-            [string]$GraphProperties = "id,displayName"
-            Write-Verbose "MappingAttributeTable contains $($GroupGuids.Count) GUIDs and $($GroupNames.Count) display names"
-            $ProcessedGroupIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-            # Get groups by display name first
-            if ($GroupNames.Count -gt 0) {
-                Write-Verbose "Resolving $($GroupNames.Count) groups by display name"
-                # Prepare filters (chunked to avoid URL length limits)
-                [int]$FilterChunkSize = 10
-                for ([int]$i = 0; $i -lt $GroupNames.Count; $i += $FilterChunkSize) {
-                    [int]$EndIndex = [Math]::Min($i + $FilterChunkSize - 1, $GroupNames.Count - 1)
-                    [array]$Chunk = $GroupNames[$i..$EndIndex]
-                    [string]$GraphFilterString = ($Chunk | ForEach-Object { "displayName eq '$($_ -replace "'","''")'" }) -join ' or '
-                   
-                    Write-Verbose "Fetching groups chunk $([Math]::Floor($i / $FilterChunkSize) + 1) of $([Math]::Ceiling($GroupNames.Count / $FilterChunkSize)) ($($Chunk.Count) groups)"
-                    # Get graph objects
-                    $ChunkGroups = Invoke-MgGraphRequestSingle `
-                        -GraphRunProfile 'v1.0' `
-                        -GraphMethod 'GET' `
-                        -GraphObject 'groups' `
-                        -GraphProperties $GraphProperties `
-                        -GraphFilters $GraphFilterString `
-                        -GraphMaxRetry $GraphMaxRetry `
-                        -GraphWaitTime $GraphWaitTime
-                    
-                    if ($ChunkGroups -and $ChunkGroups.Count -gt 0) {
-                        foreach ($Grp in $ChunkGroups) {
-                            if ($ProcessedGroupIds.Add($Grp.id)) {
-                                $AllGroups.Add($Grp)
-                            }
-                        }
-                    }
-                }
-                Write-Verbose "Resolved $($AllGroups.Count) groups by display name"
-            }
-            
-            # Get Groups by GUIDs
-            if ($GroupGuids.Count -gt 0) {
-                # Filter out GUIDs already resolved from display names
-                [System.Collections.Generic.List[PSObject]]$GuidOnlyGroups = [System.Collections.Generic.List[PSObject]]::new()
-                foreach ($Guid in $GroupGuids) {
-                    if (-not $ProcessedGroupIds.Contains($Guid)) {
-                        $GuidOnlyGroups.Add([PSCustomObject]@{ id = $Guid })
-                    }
-                }
-                if ($GuidOnlyGroups.Count -gt 0) {
-                    Write-Verbose "Fetching details for $($GuidOnlyGroups.Count) groups by GUID"
-                    # Batch get graph objects
-                    $GroupDetailResults = Invoke-MgGraphRequestBatch `
-                        -GraphRunProfile 'v1.0' `
-                        -GraphMethod 'GET' `
-                        -GraphObject 'groups' `
-                        -GraphObjects $GuidOnlyGroups `
-                        -GraphQuery '' `
-                        -GraphProperties $GraphProperties `
-                        -GraphBatchSize $GraphBatchSize `
-                        -GraphWaitTime $GraphWaitTime `
-                        -GraphMaxRetry $GraphMaxRetry
-                    
-                    foreach ($Result in $GroupDetailResults) {
-                        if ($Result.id -and $Result.displayName) {
-                            if ($ProcessedGroupIds.Add($Result.id)) {
-                                $AllGroups.Add([PSCustomObject]@{ id = $Result.id; displayName = $Result.displayName })
-                            }
-                        }
-                    }
-                    Write-Verbose "Retrieved $($GuidOnlyGroups.Count) group details by GUID"
-                }
-            }
-            Write-Verbose "Total groups resolved: $($AllGroups.Count)"
-        }
-    }
-    catch {
-        Write-Error "Failed to get groups from mapping: $($_.Exception.Message)"
-        throw
-    }
-
-    # Get members for all mapped groups
-    foreach ($group in $AllGroups) {
-        # Build hashtables for fast lookups first
-        $AllGroupsByDisplayNameHash[$group.displayName] = $group
-        $AllGroupsByIdHash[$group.id] = $group
-        $GroupMembersByGroupIdHash[$group.id] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    }
-    if ($AllGroups -and $AllGroups.Count -gt 0) {
-        try {
-            Write-Verbose "Fetching members for $($AllGroups.Count) groups (with pagination support)"
-            # Get members for each group
-            foreach ($group in $AllGroups) {
-                # List properties to retrieve
-                [string]$GraphProperties = "id"
-                
-                [System.Collections.Generic.HashSet[string]]$memberSet = $GroupMembersByGroupIdHash[$group.id]
-                [int]$memberCount = 0
-                # Get graph objects
-                $groupMembers = Invoke-MgGraphRequestSingle `
-                    -GraphRunProfile 'v1.0' `
-                    -GraphMethod 'GET' `
-                    -GraphObject "groups/$($group.id)/members" `
-                    -GraphProperties $GraphProperties `
-                    -GraphMaxRetry $GraphMaxRetry `
-                    -GraphWaitTime $GraphWaitTime
-                
-                if ($groupMembers -and $groupMembers.Count -gt 0) {
-                    foreach ($member in $groupMembers) {
-                        if ($member.id) {
-                            [void]$memberSet.Add($member.id)
-                            $memberCount++
-                        }
-                    }
-                }
-                Write-Verbose "Group '$($group.displayName)': $memberCount members"
-            }
-            
-            # Log total members across all groups
-            [int]$totalMembers = 0
-            foreach ($kvp in $GroupMembersByGroupIdHash.GetEnumerator()) {
-                $totalMembers += $kvp.Value.Count
-            }
-            Write-Verbose "Created group lookup hashtables: DisplayName=$($AllGroupsByDisplayNameHash.Count), Id=$($AllGroupsByIdHash.Count), TotalMembers=$totalMembers"
-        }
-        catch {
-            Write-Error "Failed to get group members: $($_.Exception.Message)"
-            throw
-        }
-    }
-    else {
-        Write-Warning "No groups matching the mapping were found in tenant - skipping member retrieval"
-    }
-
-    # Process each device and determine group membership changes
-    [System.Collections.Generic.List[PSObject]]$DevicesToAddToGroups = [System.Collections.Generic.List[PSObject]]::new()
-    [System.Collections.Generic.List[PSObject]]$DevicesToRemoveFromGroups = [System.Collections.Generic.List[PSObject]]::new()
+    # Process all devices and set the scope tag to match info on the primary user
+    [System.Collections.Generic.List[PSObject]]$DevicesToUpdate = [System.Collections.Generic.List[PSObject]]::new()
     $DeviceState = [System.Collections.Generic.Dictionary[string,hashtable]]::new([StringComparer]::OrdinalIgnoreCase)
     
-    foreach ($Device in $AllDevices) {
+    # Process each device
+    foreach ($Device in $AllDevicesWithTags) {
+        # Cache device properties for faster access
         $DeviceName = $Device.DeviceName
-        $DeviceAzureAdId = $Device.azureADDeviceId
-        $DeviceDirectoryObjectId = $null
+        $DeviceId = $Device.id
 
-        # Validate Entra ID on device, if missing early exit
-        if ([string]::IsNullOrWhiteSpace($DeviceAzureAdId) -or $DeviceAzureAdId -eq '00000000-0000-0000-0000-000000000000') {
-            & $AddReport -Target $DeviceName -OldValue 'No.EntraIdOnDevice' -NewValue 'N/A' -Action 'Skipped-EntraIdOnDevice' -Details 'Missing Entra ID on Device In Intune'
-            continue
-        }
-        # Resolve Entra device object id from deviceId, if missing early exit
-        if (-not $EntraDeviceObjectIdByDeviceId.TryGetValue($DeviceAzureAdId, [ref]$DeviceDirectoryObjectId)) {
-            & $AddReport -Target $DeviceName -OldValue 'No.EntraDevice' -NewValue 'N/A' -Action 'Skipped-EntraDeviceNotFound' -Details 'Could not resolve Entra device object id from deviceId'
-            continue
-        }
         # Get current Primary User, if missing early exit
         $CurrentPrimaryUser = $null
         if (-not ($Device.userId -and $AllUsersByIdHash.TryGetValue($Device.userId, [ref]$CurrentPrimaryUser))) {
             & $AddReport -Target $DeviceName -OldValue 'No.CurrentPrimaryUser' -NewValue 'N/A' -Action 'Skipped-NoPrimaryUser' -Details 'Missing Current Primary User'
             continue
         }
+
         # Get mapping attribute value, if missing early exit
         $MappingAttributeValue = $CurrentPrimaryUser.$MappingAttribute
         if ([string]::IsNullOrWhiteSpace($MappingAttributeValue)) {
@@ -1813,135 +1700,140 @@ try {
         }
         # Check if mapping exists, if missing early exit
         if (-not $MappingAttributeTable.ContainsKey($MappingAttributeValue)) {
-            & $AddReport -Target $DeviceName -OldValue $MappingAttributeValue -NewValue 'N/A' -Action 'Skipped-NoMapping' -Details 'No Group Mapping Found'
+            & $AddReport -Target $DeviceName -OldValue $MappingAttributeValue -NewValue 'N/A' -Action 'Skipped-NoMapping' -Details 'No Attribute Mapping Found'
             continue
         }
-        # Get target group from mapping, if missing early exit
-        $TargetGroupIdentifier = $MappingAttributeTable[$MappingAttributeValue]
-        $TargetGroup = $null
-        if (-not $AllGroupsByIdHash.TryGetValue($TargetGroupIdentifier, [ref]$TargetGroup) -and 
-            -not $AllGroupsByDisplayNameHash.TryGetValue($TargetGroupIdentifier, [ref]$TargetGroup)) {
-            & $AddReport -Target $DeviceName -OldValue $MappingAttributeValue -NewValue $TargetGroupIdentifier -Action 'Skipped-GroupNotFound' -Details 'Target group not found in tenant'
+        # Get desired scope tag object, if missing early exit
+        $DesiredScopeTagName = $MappingAttributeTable[$MappingAttributeValue]
+        $DesiredScopeTag = $null
+        if (-not $AllScopeTagByDisplayNameHash.TryGetValue($DesiredScopeTagName, [ref]$DesiredScopeTag)) {
+            & $AddReport -Target $DeviceName -OldValue $MappingAttributeValue -NewValue $DesiredScopeTagName -Action 'Skipped-ScopeTagNotFound' -Details 'Scope Tag not found in tenant'
             continue
         }
-        # Check membership and build add/remove lists
-        $TargetGroupId = $TargetGroup.id
-        $TargetGroupName = $TargetGroup.displayName
-        $IsAlreadyMember = $false
-        $GroupsToRemoveNames = [System.Collections.Generic.List[string]]::new()
-        foreach ($MappedGroup in $AllGroups) {
-            $MemberSet = $null
-            if ($GroupMembersByGroupIdHash.TryGetValue($MappedGroup.id, [ref]$MemberSet) -and $MemberSet.Contains($DeviceDirectoryObjectId)) {
-                if ($MappedGroup.id -eq $TargetGroupId) { $IsAlreadyMember = $true }
-                else {
-                    $GroupsToRemoveNames.Add($MappedGroup.displayName)
-                    $DevicesToRemoveFromGroups.Add([PSCustomObject]@{
-                        deviceId = $DeviceDirectoryObjectId; deviceName = $DeviceName
-                        groupId = $MappedGroup.id; groupName = $MappedGroup.displayName
-                    })
-                }
+        
+        # Add builtin "Default" scope tag if requested
+        [array]$NewScopeTagIds = if ($KeepBuiltinTag) { $DesiredScopeTag.id, "0" } else { $DesiredScopeTag.id }
+        $NewScopeTagIds = @($NewScopeTagIds | Select-Object -Unique | Sort-Object)
+        
+        # Get current scope tag IDs from device
+        $DeviceWithTags = $null
+        [array]$CurrentScopeTagIds = if ($AllDevicesWithTagsByDeviceIdHash.TryGetValue($DeviceId, [ref]$DeviceWithTags) -and $DeviceWithTags.roleScopeTagIds) {
+            @($DeviceWithTags.roleScopeTagIds) | Sort-Object
+        } else { @() }
+        
+        # Compare if current tags match desired tags (fast string comparison on sorted arrays)
+        [bool]$TagsMatch = (@($CurrentScopeTagIds).Count -eq @($NewScopeTagIds).Count) -and (($CurrentScopeTagIds -join ',') -eq ($NewScopeTagIds -join ','))
+        
+        # Convert to names for reporting
+        $CurrentNames = ($CurrentScopeTagIds | ForEach-Object { 
+            if ($_ -eq "0") { "Default" } else { 
+                $T = $null; if ($AllScopeTagByIdHash.TryGetValue($_, [ref]$T)) { $T.displayName } else { $_ }
             }
-        }
-        # Prepare to add to target group if not already a member
-        $NeedsAdd = -not $IsAlreadyMember
-        if ($NeedsAdd) {
-            $DevicesToAddToGroups.Add([PSCustomObject]@{
-                deviceId = $DeviceDirectoryObjectId; deviceName = $DeviceName
-                groupId = $TargetGroupId; groupName = $TargetGroupName
-            })
-        }
-        # Track state for devices needing changes
-        $OldValue = if ($GroupsToRemoveNames.Count -gt 0) { $GroupsToRemoveNames -join ', ' } else { 'N/A' }
-        $NeedsRemove = $GroupsToRemoveNames.Count -gt 0
-        if (-not $NeedsAdd -and -not $NeedsRemove) {
-            & $AddReport -Target $DeviceName -OldValue $OldValue -NewValue $TargetGroupName -Action 'Correct' -Details 'Already in correct group'
+        }) -join ','
+        $NewNames = ($NewScopeTagIds | ForEach-Object { 
+            if ($_ -eq "0") { "Default" } else { $DesiredScopeTag.displayName }
+        }) -join ','
+        
+        if ($TagsMatch) {
+            & $AddReport -Target $DeviceName -OldValue $CurrentNames -NewValue $NewNames -Action 'Correct' -Details 'Scope Tags already correct'
+            Write-Verbose "Device: $DeviceName already has correct scope tags: $NewNames"
         }
         else {
+            # Add device to batch update queue
+            $DevicesToUpdate.Add([PSCustomObject]@{
+                id = $DeviceId
+                deviceName = $DeviceName
+                body = @{ roleScopeTagIds = $NewScopeTagIds }
+            })
             # Cache state - report will be generated after batch operations complete
-            $DeviceState[$DeviceName] = @{ 
-                needsAdd = $NeedsAdd; needsRemove = $NeedsRemove
-                oldValue = $OldValue; newValue = $TargetGroupName
-                addOk = $true; removeOk = $true; errorMsg = $null 
+            $DeviceState[$DeviceName] = @{
+                oldValue = $CurrentNames; newValue = $NewNames
+                updateOk = $true; errorMsg = $null
             }
+            Write-Verbose "Device: $DeviceName Scope Tag change needed: $CurrentNames → $NewNames"
         }
     }
     
-    # Process batch group operations
-    foreach ($OpConfig in @(
-        @{ items = $DevicesToAddToGroups; method = 'POST'; isAdd = $true; stateKey = 'addOk' },
-        @{ items = $DevicesToRemoveFromGroups; method = 'DELETE'; isAdd = $false; stateKey = 'removeOk' }
-    )) {
-        if ($OpConfig.items.Count -eq 0) { continue }
-        $OpName = if ($OpConfig.isAdd) { 'addition' } else { 'removal' }
-        Write-Verbose "Processing $($OpConfig.items.Count) group membership ${OpName}s"
+    # Process batch updates for devices that need changes
+    if ($DevicesToUpdate.Count -gt 0) {
+        Write-Verbose "Starting batch update for $($DevicesToUpdate.Count) devices"
         
-        if ($WhatIfPreference) {
-            foreach ($Item in $OpConfig.items) { 
-                Write-Verbose "WhatIf: Would $(if($OpConfig.isAdd){'add'}else{'remove'}) device $($Item.deviceName) $(if($OpConfig.isAdd){'to'}else{'from'}) group $($Item.groupName)" 
-            }
-            continue
-        }
-        
-        foreach ($GroupOp in ($OpConfig.items | Group-Object -Property groupId)) {
-            $GroupId = $GroupOp.Name
-            $GroupName = $GroupOp.Group[0].groupName
+        if (-not $WhatIfPreference) {
             try {
-                Write-Verbose "$(if($OpConfig.isAdd){'Adding'}else{'Removing'}) $($GroupOp.Count) devices $(if($OpConfig.isAdd){'to'}else{'from'}) group: $GroupName"
-                $BatchObjects = [System.Collections.Generic.List[PSObject]]::new()
-                foreach ($Dev in $GroupOp.Group) {
-                    $Obj = [PSCustomObject]@{ id = $Dev.deviceId }
-                    if ($OpConfig.isAdd) { $Obj | Add-Member -NotePropertyName 'body' -NotePropertyValue @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$($Dev.deviceId)" } }
-                    $BatchObjects.Add($Obj)
+                $BatchResults = Invoke-MgGraphRequestBatch `
+                    -GraphRunProfile 'beta' `
+                    -GraphMethod 'PATCH' `
+                    -GraphObject 'deviceManagement/managedDevices' `
+                    -GraphObjects $DevicesToUpdate `
+                    -GraphQuery '' `
+                    -GraphBatchSize $GraphBatchSize `
+                    -GraphWaitTime $GraphWaitTime `
+                    -GraphMaxRetry $GraphMaxRetry
+                
+                Write-Verbose "Batch update completed with $($BatchResults.Count) results"
+                
+                # Create lookup hash and track processed IDs
+                $DevicesToUpdateHash = [System.Collections.Generic.Dictionary[string,object]]::new($DevicesToUpdate.Count, [System.StringComparer]::OrdinalIgnoreCase)
+                foreach ($D in $DevicesToUpdate) { $DevicesToUpdateHash[$D.id] = $D }
+                $ProcessedIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                
+                # Process batch results
+                foreach ($Result in $BatchResults) {
+                    $ResultId = if ($Result.id) { $Result.id } elseif ($Result.'@odata.id') { ($Result.'@odata.id' -split '/')[-1] } else { $null }
+                    if ($ResultId) {
+                        [void]$ProcessedIds.Add($ResultId)
+                        $DeviceInfo = $null
+                        if ($DevicesToUpdateHash.TryGetValue($ResultId, [ref]$DeviceInfo)) {
+                            Write-Verbose "Successfully updated device $($DeviceInfo.deviceName)"
+                        }
+                    }
                 }
                 
-                $BatchParams = @{ GraphRunProfile = 'v1.0'; GraphMethod = $OpConfig.method; GraphBatchSize = 20; GraphWaitTime = $GraphWaitTime; GraphMaxRetry = $GraphMaxRetry }
-                if ($OpConfig.isAdd) { $BatchParams['GraphObject'] = "groups/$GroupId/members/`$ref"; $BatchParams['GraphQuery'] = ''; $BatchParams['GraphNoObjectIdInUrl'] = $true }
-                else { $BatchParams['GraphObject'] = "groups/$GroupId/members"; $BatchParams['GraphQuery'] = '/`$ref' }
-                $null = Invoke-MgGraphRequestBatch @BatchParams -GraphObjects $BatchObjects
-
-                # Update cache on success
-                foreach ($Dev in $GroupOp.Group) { Write-Verbose "$(if($OpConfig.isAdd){'Added'}else{'Removed'}) device $($Dev.deviceName) $(if($OpConfig.isAdd){'to'}else{'from'}) group $GroupName" }
-                $MemberSet = $null
-                if ($GroupMembersByGroupIdHash.TryGetValue($GroupId, [ref]$MemberSet)) {
-                    foreach ($Dev in $GroupOp.Group) { 
-                        if ($OpConfig.isAdd) { [void]$MemberSet.Add($Dev.deviceId) } else { [void]$MemberSet.Remove($Dev.deviceId) }
+                # Mark devices not in results as failed
+                foreach ($Dev in $DevicesToUpdate) {
+                    if (-not $ProcessedIds.Contains($Dev.id)) {
+                        $State = $null
+                        if ($DeviceState.TryGetValue($Dev.deviceName, [ref]$State)) {
+                            $State.updateOk = $false
+                            $State.errorMsg = 'No response received from batch'
+                        }
                     }
                 }
             }
             catch {
-                $ErrorMsg = $_.Exception.Message
-                Write-Error "Failed to $(if($OpConfig.isAdd){'add devices to'}else{'remove devices from'}) group '$GroupName': $ErrorMsg"
-                foreach ($Dev in $GroupOp.Group) {
+                $BatchErrorMessage = $_.Exception.Message
+                Write-Error "Batch update failed: $BatchErrorMessage"
+                # Mark all devices as failed
+                foreach ($Dev in $DevicesToUpdate) {
                     $State = $null
                     if ($DeviceState.TryGetValue($Dev.deviceName, [ref]$State)) {
-                        $State[$OpConfig.stateKey] = $false
-                        $State.errorMsg = "$(if($OpConfig.isAdd){'Add'}else{'Remove'}) failed: $ErrorMsg"
+                        $State.updateOk = $false
+                        $State.errorMsg = $BatchErrorMessage
                     }
                 }
             }
         }
-    }
-    
-    # Generate final reports for all devices that needed changes
-    foreach ($DeviceName in $DeviceState.Keys) {
-        $State = $DeviceState[$DeviceName]
-        if ($WhatIfPreference) {
-            $Details = if ($State.needsAdd -and $State.needsRemove) { 'Would add to correct group and remove from incorrect groups' }
-                       elseif ($State.needsAdd) { 'Would add to correct group' } else { 'Would remove from incorrect groups' }
-            & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action 'WhatIf' -Details $Details
-        }
-        elseif (-not $State.addOk -or -not $State.removeOk) {
-            & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action 'Failed' -Details $State.errorMsg
-        }
-        else {
-            $Action = if ($State.needsAdd -and $State.needsRemove) { 'Success-AddedRemoved' }
-                      elseif ($State.needsAdd) { 'Success-Added' } else { 'Success-Removed' }
-            $Details = if ($State.needsAdd -and $State.needsRemove) { 'Added to correct group and removed from incorrect groups' }
-                       elseif ($State.needsAdd) { 'Added to correct group' } else { 'Removed from incorrect groups' }
-            & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action $Action -Details $Details
+        
+        # Generate final reports for all devices that needed changes
+        foreach ($DeviceName in $DeviceState.Keys) {
+            $State = $DeviceState[$DeviceName]
+            if ($WhatIfPreference) {
+                & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action 'WhatIf' -Details 'Would update scope tags'
+                Write-Verbose "WhatIf: Device $DeviceName would be updated from [$($State.oldValue)] to [$($State.newValue)]"
+            }
+            elseif (-not $State.updateOk) {
+                & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action 'Failed' -Details $State.errorMsg
+                Write-Warning "Device $DeviceName failed: $($State.errorMsg)"
+            }
+            else {
+                & $AddReport -Target $DeviceName -OldValue $State.oldValue -NewValue $State.newValue -Action 'Success-Updated' -Details 'Scope tags updated'
+                Write-Verbose "Successfully updated device $DeviceName from [$($State.oldValue)] to [$($State.newValue)]"
+            }
         }
     }
-    Write-Verbose "Group membership processing complete. Additions: $($DevicesToAddToGroups.Count), Removals: $($DevicesToRemoveFromGroups.Count)"
+    else {
+        Write-Verbose "No devices need scope tag updates"
+    }
 }
 catch {
     Write-Error "Script execution failed: $($_.Exception.Message)"
@@ -1968,6 +1860,5 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
-
 
 
