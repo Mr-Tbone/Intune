@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        4.2.1
+.VERSION        4.2.5
 .GUID           feedbeef-beef-4dad-beef-000000000003
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -16,6 +16,10 @@
     4.1.0 2026-01-21 Minor update to logging module and a lot of variable naming changes
     4.2.0 2026-02-17 Minor change to avoid mismatch  in microsoft.graph modules
     4.2.1 2026-02-17 Fix a bug in reporting function with formating issues on some regional languages
+    4.2.2 2026-02-24 Fixed ClientSecret authentication PSCredential creation
+    4.2.3 2026-02-24 Fixed clientsecret
+    4.2.4 2026-02-24 Fix AuthClientSecret
+    4.2.5 2026-02-24 Fixed ClientSecret authentication without exposing secrets
 #>
 
 <#
@@ -248,6 +252,7 @@ function Invoke-ConnectMgGraph {
     Version History:
     1.0 - Initial version
     2.0 - 2026-01-09 - Changed parameter names and fixed minor bugs on certificate authentication
+    2.1 - 2026-02-24 - Fixed ClientSecret authentication PSCredential creation
 #>
     [CmdletBinding()]
     param (
@@ -368,8 +373,10 @@ function Invoke-ConnectMgGraph {
                         throw "ClientSecret authentication requires both ClientId and TenantId."
                     }
                     # Convert SecureString to PSCredential to build ClientCredential
+                    if ($AuthClientSecret -and $AuthClientSecret -isnot [SecureString]) {
+                        $AuthClientSecret = ConvertTo-SecureString $AuthClientSecret -AsPlainText -Force
+                    }
                     [System.Management.Automation.PSCredential]$ClientCredential = [System.Management.Automation.PSCredential]::new($AuthClientId, $AuthClientSecret)
-                    $ConnectParams['ClientId']               = $AuthClientId
                     $ConnectParams['TenantId']               = $AuthTenantId
                     $ConnectParams['ClientSecretCredential'] = $ClientCredential
                     Write-Verbose "Using ClientId: $AuthClientId, TenantId: $AuthTenantId"
@@ -1861,6 +1868,10 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
+
+
+
 
 
 
