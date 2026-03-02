@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        4.2.6
+.VERSION        4.2.5
 .GUID           feedbeef-beef-4dad-beef-000000000002
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -20,7 +20,6 @@
     4.2.3 2026-02-24 Fixed clientsecret
     4.2.4 2026-02-24 Fix AuthClientSecret
     4.2.5 2026-02-24 Fixed ClientSecret authentication without exposing secrets
-    4.2.6 2026-03-02 Fix to support both secure and non secure secret string using object type
 #>
 
 <#
@@ -1978,7 +1977,6 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
-
 
 
 

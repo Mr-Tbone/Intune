@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        7.4.5
+.VERSION        7.4.6
 .GUID           feedbeef-beef-4dad-beef-000000000001
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -39,6 +39,7 @@
     7.4.3 2026-02-24 Fixed clientsecret
     7.4.4 2026-02-24 Fix AuthClientSecret
     7.4.5 2026-02-24 Fixed ClientSecret authentication without exposing secrets
+    7.4.6 2026-03-02 Fix to support both secure and non secure secret string using object type
 #>
 
 <#
@@ -119,9 +120,9 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$AuthClientId,
     
-    [Parameter(                             HelpMessage = "Client Secret as SecureString for app-only authentication (require also ClientId and TenantId)")]
+    [Parameter(                             HelpMessage = "Client Secret as SecureString or string for app-only authentication (require also ClientId and TenantId)")]
     [ValidateNotNull()]
-    [SecureString]$AuthClientSecret, 
+    [Object]$AuthClientSecret, 
     
     [Parameter(                             HelpMessage = "Certificate thumbprint for certificate-based authentication (if certificate is stored in CurrentUser or LocalMachine store)")]
     [ValidateNotNullOrEmpty()]
@@ -271,6 +272,7 @@ function Invoke-ConnectMgGraph {
     1.0 - Initial version
     2.0 - 2026-01-09 - Changed parameter names and fixed minor bugs on certificate authentication
     2.1 - 2026-02-24 - Fixed ClientSecret authentication PSCredential creation
+    2.2 - 2026-03-01 - Fix to support both secure and non secure secret string using object type
 #>
     [CmdletBinding()]
     param (
@@ -285,9 +287,9 @@ function Invoke-ConnectMgGraph {
         [ValidateNotNullOrEmpty()]
         [string]$AuthClientId, 
 
-        [Parameter(             HelpMessage = "Client Secret as SecureString for app-only authentication (require also ClientId and TenantId)")]
+        [Parameter(             HelpMessage = "Client Secret as SecureString or stringfor app-only authentication (require also ClientId and TenantId)")]
         [ValidateNotNull()]
-        [SecureString]$AuthClientSecret,
+        [Object]$AuthClientSecret,
 
         [Parameter(             HelpMessage = "Certificate subject name for certificate-based authentication (if certificate is stored in CurrentUser or LocalMachine store)")]
         [ValidateNotNullOrEmpty()]
@@ -390,11 +392,12 @@ function Invoke-ConnectMgGraph {
                     if (-not $HasClientId -or -not $HasTenantId) {
                         throw "ClientSecret authentication requires both ClientId and TenantId."
                     }
-                    # Convert SecureString to PSCredential to build ClientCredential
-                    if ($AuthClientSecret -and $AuthClientSecret -isnot [SecureString]) {
-                        $AuthClientSecret = ConvertTo-SecureString $AuthClientSecret -AsPlainText -Force
-                    }
-                    [System.Management.Automation.PSCredential]$ClientCredential = [System.Management.Automation.PSCredential]::new($AuthClientId, $AuthClientSecret)
+                    # Convert to SecureString if it's a plain string
+                    [SecureString]$SecureClientSecret = if ($AuthClientSecret -is [SecureString]) {$AuthClientSecret}
+                        elseif ($AuthClientSecret -is [string]) {ConvertTo-SecureString -String $AuthClientSecret -AsPlainText -Force}
+                        else {throw "AuthClientSecret must be either a string or SecureString"}
+                    # Now lets use the secure string to build credentials    
+                    [System.Management.Automation.PSCredential]$ClientCredential = [System.Management.Automation.PSCredential]::new($AuthClientId, $SecureClientSecret)
                     $ConnectParams['TenantId']               = $AuthTenantId
                     $ConnectParams['ClientSecretCredential'] = $ClientCredential
                     Write-Verbose "Using ClientId: $AuthClientId, TenantId: $AuthTenantId"
@@ -1979,6 +1982,7 @@ finally { #End Script and restore preferences
     Write-Verbose "Script finished. Memory usage: $MemoryUsage MB"
 }
 #endregion
+
 
 
 
