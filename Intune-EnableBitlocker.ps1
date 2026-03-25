@@ -1,4 +1,16 @@
 <#
+.VERSION        1.0.1
+.GUID           feedbeef-beef-4dad-beef-000000000001
+.AUTHOR         @MrTbone_se (T-bone Granheden)
+.COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
+.TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
+.LICENSEURI     https://opensource.org/licenses/MIT
+.PROJECTURI     https://github.com/Mr-Tbone/Intune
+.RELEASENOTES
+    1.0.1 - Initial Version
+#>
+
+<#
 .SYNOPSIS
     Intune ScheduleJob Wrapper with scriptblock to enable bitlocker and backup bitlockker key
  
@@ -15,8 +27,10 @@
     Scriptblock contains script to enable bitlocker and backup bitlockker key
  
 .NOTES
-    Written by Torbjörn Granheden Coligo AB
-    torbjorn.granheden@coligo.se
+    Please feel free to use this, but make sure to credit @MrTbone_se as the original author
+
+.LINK
+    https://tbone.se
 #>
 
 #region ---------------------------------------------------[Set script requirements]-----------------------------------------------
