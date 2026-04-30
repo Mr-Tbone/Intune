@@ -64,3 +64,11 @@ Script for Intune to build an app that show in Add/Remove Programs from a PowerS
 This script will act as a wrapper for PowerShell script.
 It will copy the script and icon to program files and add the necessary registry keys to show up in Add/Remove Programs.
 The PowerShell based app can be installed, uninstalled and reinstalled from Add/Remove Programs and also show the app version and icon.
+
+## [Wrap-PSScriptToAddRemovePrograms.ps1](<Wrap-PSScriptToAddRemovePrograms.ps1>)
+Script for Intune to build an app that show in Add/Remove Programs from a PowerShell Script
+
+### Description
+This script will act as a wrapper for PowerShell script.
+It will copy the script and icon to program files and add the necessary registry keys to show up in Add/Remove Programs.
+The PowerShell based app can be installed, uninstalled and reinstalled from Add/Remove Programs and also show the app version and icon.

@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        3.0.0
+.VERSION        3.0.1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16e0
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -12,6 +12,7 @@
     2.0.1 2026-04-16 Fixed MSI version detection from Intune
     2.0.2 2026-05-27 Added function for detection of execution context
     3.0.0 2026-04-30 Major update to script logic and new function added
+    3.0.1 2026-04-30 fixed Script rename references
 #>
 
 <#
@@ -23,15 +24,15 @@
     The PowerShell based app can be installed, uninstalled and reinstalled from Add/Remove Programs and also show the app version and icon.
 
 .EXAMPLE
-   .\Register-PSscriptToAddRemovePrograms.ps1
+   .\Wrap-PSScriptToAddRemovePrograms.ps1
     Will run the wrapped powershell script once to install with the default parameters.
 
 .EXAMPLE
-   .\Register-PSscriptToAddRemovePrograms.ps1 -InstallType ReInstall
+   .\Wrap-PSScriptToAddRemovePrograms.ps1 -InstallType ReInstall
     Will re-run the wrapped powershell script to install with the default parameters.
 
 .EXAMPLE
-   .\Register-PSscriptToAddRemovePrograms.ps1 -InstallType UnInstall
+   .\Wrap-PSScriptToAddRemovePrograms.ps1 -InstallType UnInstall
     Will run the wrapped powershell script to uninstall with the default parameters..
 
 .NOTES
@@ -1212,3 +1213,4 @@ finally {
     Invoke-TboneLog Stop
 }
 #endregion
+
