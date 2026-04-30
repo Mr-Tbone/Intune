@@ -1,6 +1,4 @@
 {
-  // Copilot Auto-Approvals
-  "chat.tools.terminal.autoApprove": true,
   "chat.tools.run.autoApprove": true,
   "chat.tools.file.autoApprove": true,
   "chat.tools.edit.autoApprove": true,
@@ -69,15 +67,5 @@
   
   // Diff Editor
   "diffEditor.ignoreTrimWhitespace": true,
-  
-  // GitHub Copilot
-  "github.copilot.enable": {
-    "*": true,
-    "yaml": true,
-    "plaintext": true,
-    "markdown": true,
-    "powershell": true
-  },
-  "github.copilot.editor.enableAutoCompletions": true,
-  "github.copilot.renameSuggestions.triggerAutomatically": true
+  "github.copilot.editor.enableAutoCompletions": true
 }

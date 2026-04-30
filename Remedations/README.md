@@ -24,7 +24,6 @@ This script maps network drives or printers for cloud-native (Entra ID joined) W
 When run as SYSTEM (via Intune), it creates a scheduled task that runs as the logged-in user.
 The scheduled task executes on logon and network connection events to map drives/printers.
 Group memberships are queried via LDAP to determine which mappings apply to the user.
-
 ## [Remediation-MapPrintersCloudNative.ps1](<Remediation-MapPrintersCloudNative.ps1>)
 This script will map drives and printers for cloud native devices
 It can be used as both script and remediation script in Intune.
@@ -35,6 +34,7 @@ This script maps network drives or printers for cloud-native (Entra ID joined) W
 When run as SYSTEM (via Intune), it creates a scheduled task that runs as the logged-in user.
 The scheduled task executes on logon and network connection events to map drives/printers.
 Group memberships are queried via LDAP to determine which mappings apply to the user.
+
 
 
 
