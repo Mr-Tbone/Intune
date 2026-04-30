@@ -359,7 +359,7 @@ try {
         $diagnostics = Get-SecureBootDiagnostics -registryKeys $registryKeysStatus -OSversions $OSversions
 
         # Use Diagnostics to determine the state and if remediation is needed
-        if ($diagnostics -and $diagnostics.SecureBootEnabled) {
+        if ($diagnostics -and $diagnostics.SecureBootEnabled -eq 'Enabled') {
             # Determine state based on registry key value in UEFICA2023Status
             switch ($diagnostics.'Reg:UEFICA2023Status') {
                 "Updated" { 
