@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        3.0.3
+.VERSION        3.0.2
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16e0
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -14,7 +14,6 @@
     3.0.0 2026-04-30 Major update to script logic and new function added
     3.0.1 2026-04-30 fixed Script rename references
     3.0.2 2026-04-30 Fixed examples
-    3.0.3 2026-05-07 Fix small syntax issues
 #>
 
 <#
