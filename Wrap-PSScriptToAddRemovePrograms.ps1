@@ -58,6 +58,27 @@ param(
     [Parameter(Mandatory = $false,          HelpMessage = "Testmode, same as -WhatIf. Default is false")]
     [bool]$Testmode                 = $false,
 
+# ==========> Script Context Requirements (verified against execution context) <=======================================
+    [Parameter(Mandatory = $false,          HelpMessage = 'Required execution identity. Script aborts if not matched. Valid: System, LocalService, NetworkService, ServiceAccount, Admin, User')]
+    [ValidateSet('System','LocalService','NetworkService','ServiceAccount','Admin','User')]
+    [string[]]$CTXReqIdentity       = @(),
+
+    [Parameter(Mandatory = $false,          HelpMessage = 'Minimum required PowerShell version (e.g. 5.1). Script aborts if PSVersion is lower.')]
+    [version]$CTXReqPSVersion    = $null,
+
+    [Parameter(Mandatory = $false,          HelpMessage = 'Minimum required OS build number (e.g. 19041 for Windows 10 2004). Script aborts if OS build is lower.')]
+    [int]$CTXReqOSBuild          = 0,
+
+    [Parameter(Mandatory = $false,          HelpMessage = 'Required process architecture, exits if not matched. Default = "" No required architecture. Valid: "", "x64", "x86"')]
+    [ValidateSet('x64','x86','')]
+    [string]$CTXReqArchitecture     = "",
+
+    [Parameter(Mandatory = $false,          HelpMessage = 'If $true and CTXReqArchitecture=x64 but running x86, relaunch via SysNative (Intune-friendly self-elevation to x64).')]
+    [bool]$CTXAutoRelaunchToX64     = $false,
+
+    [Parameter(Mandatory = $false,          HelpMessage = 'If $true, script aborts when a reboot is pending (CBS, Windows Update, or PendingFileRenameOperations).')]
+    [bool]$CTXAbortIfPendingReboot  = $false,
+
 # ==========> Add Application to Add Remove Program (Add-AddRemoveProgram) <===========================================
     [Parameter(Mandatory = $false,          HelpMessage = 'Name of the application/script being wrapped')]
     [String]$ARPAppName             = "T-Bone App",
@@ -249,157 +270,276 @@ function Invoke-TboneLog {
     }
 }
 
-function Get-ScriptExecutionContext {
+Function Get-ExecutionContext {
 <#
 .SYNOPSIS
-    Detects how the script is being executed and returns a context object with all relevant properties.
+    Detects how the script is being executed and (optionally) validates it against requirements; can auto-relaunch in 64-bit.
 .DESCRIPTION
-    Inspects environment variables, the script path, parent/ancestor processes, and identity to determine and return a PSCustomObject with the following properties:
-    - ExecutionMode     : WinPE, AzureAutomation, AzureFunction, GitHubActions, GitLabCI, AzureDevOps, TaskSequence,
-                          Remediation, Detection, PlatformScript, Intunewin, SCCM, GPO, or Standalone
-    - ExecutionPath     : ProgramFiles, ProgramFilesX86, IMEContent, ProgramData, AppDataRoaming, AppDataLocal,
-                          IMECache, CCMCache, SystemRoot, or Other
-    - ExecutionSource   : Managed (set for any non-Standalone ExecutionMode), or one of
-                          Manual, ScheduledTask, RemoteSession, VSCodeDebug, ISE, Explorer, Batch, Interactive
-    - ExecutionIdentity : System, LocalService, NetworkService, ServiceAccount, Admin, or User
+    Inspects environment variables, the script path, parent/ancestor processes, identity, and architecture and returns a PSCustomObject with the following properties:
+    - CTXMode           : WinPE, AzureAutomation, AzureFunction, GitHubActions, GitLabCI, AzureDevOps, TaskSequence,
+                              Remediation, Detection, PlatformScript, Intunewin, SCCM, GPO, or Standalone
+    - CTXPath           : ProgramFiles, ProgramFilesX86, IMEContent, ProgramData, AppDataRoaming, AppDataLocal,
+                              IMECache, CCMCache, SystemRoot, or Other
+    - CTXSource         : Managed (set for any non-Standalone CTXMode), or one of
+                              Manual, ScheduledTask, RemoteSession, VSCodeDebug, ISE, Explorer, Batch, Interactive
+    - CTXIdentity       : System, LocalService, NetworkService, ServiceAccount, Admin, or User
+    - CTXArchitecture   : x64 or x86
+    - CTXPSVersion      : Version object from $PSVersionTable.PSVersion (e.g. 5.1.19041.0)
+    - CTXOSBuild        : Integer Windows OS build number (0 on non-Windows)
+    - CTXPendingReboot  : Boolean; $true when a reboot is pending (CBS / Windows Update / PendingFileRenameOperations)
+
+    When any of -CTXReqIdentity / -CTXReqArchitecture / -CTXReqMode / -CTXReqPSVersion / -CTXReqOSBuild / -CTXAbortIfPendingReboot is provided, the detected context is validated:
+    On success the context object is returned, on failure $null is returned (and an error is written).
 .NOTES
-    Author:  @MrTbone_se (T-bone Granheden)
-    Version: 1.2.0
+    Version: 1.1.0
+    
+    Version History:
+    1.0 - Initial version
+    1.0.1 - Fixed some edge cases in detection logic
+    1.1.0 - Added reqirements parameters and validation logic, and auto-relaunch to x64 if required and running x86
 #>
     [CmdletBinding()]
     [OutputType([PSCustomObject])]
-    param()
+    param(
+        [Parameter(HelpMessage = 'Required execution identity. Valid: System, LocalService, NetworkService, ServiceAccount, Admin, User')]
+        [ValidateSet('System','LocalService','NetworkService','ServiceAccount','Admin','User')]
+        [string[]]$CTXReqIdentity     = @(),
+
+        [Parameter(HelpMessage = 'Required process architecture. Valid: x64, x86 (empty = no requirement)')]
+        [ValidateSet('x64','x86','')]
+        [string]$CTXReqArchitecture   = '',
+
+        [Parameter(HelpMessage = 'Required execution mode (any value returned in CTXMode).')]
+        [string[]]$CTXReqMode         = @(),
+
+        [Parameter(HelpMessage = 'Minimum required PowerShell version (e.g. 5.1). Fails if PSVersionTable.PSVersion is lower.')]
+        [version]$CTXReqPSVersion  = $null,
+
+        [Parameter(HelpMessage = 'Minimum required OS build number (e.g. 19041 for Win10 2004). Fails if OS build is lower.')]
+        [int]$CTXReqOSBuild        = 0,
+
+        [Parameter(HelpMessage = 'If set, abort when a reboot is pending (CBS, Windows Update, or file rename pending).')]
+        [switch]$CTXAbortIfPendingReboot,
+
+        [Parameter(HelpMessage = 'If set and process is x86 while x64 is required, relaunch via SysNative.')]
+        [switch]$CTXAutoRelaunchToX64,
+
+        [Parameter(HelpMessage = 'Caller bound parameters to forward on relaunch (pass $PSBoundParameters from the caller).')]
+        [hashtable]$CTXForwardParameters   = @{}
+    )
+    Write-Verbose "Start function Get-ExecutionContext"
     # Initialize variables
-    [string]$ExecutionMode                  = 'Standalone'
-    [string]$ExecutionPath                  = 'Other'
-    [string]$ExecutionSource                = 'Managed'
-    [string]$ExecutionIdentity              = 'User'
-    [string]$private:scriptPath             = $script:PSCommandPath
-    [string]$private:scriptRoot             = $script:PSScriptRoot
+    [string]$CTXMode    = 'Standalone'
+    [string]$CTXPath    = 'Other'
+    [string]$CTXSource  = 'Managed'
+    [string]$CTXIdentity= 'User'
+    [string]$scriptPath = $script:PSCommandPath
+    [string]$scriptRoot = $script:PSScriptRoot
+    # PS5.1 Desktop is always Windows; PS6+ exposes $IsWindows
+    [bool]$isWin = ($PSVersionTable.PSEdition -eq 'Desktop') -or $IsWindows
+
+    # Helper: walk parent processes from $PID up to 8 levels using a PID->Win32_Process hashtable
+    $getAncestors = {
+        param([hashtable]$Table)
+        $list = [System.Collections.Generic.List[int]]::new()
+        $cur  = $PID
+        while ($list.Count -lt 8 -and $Table.ContainsKey($cur)) {
+            $parent = [int]$Table[$cur].ParentProcessId
+            if ($parent -eq 0 -or $parent -eq $cur) { break }
+            $list.Add($parent)
+            $cur = $parent
+        }
+        ,$list
+    }
 
     # ---- Execution Mode detection -------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    # Get execution mode from environment variables (quick and reliable for managed contexts, but not always present)
-    if     (Test-Path 'HKLM:\SYSTEM\ControlSet001\Control\MiniNT')                          { $ExecutionMode = 'WinPE'           }
-    elseif ((Test-Path variable:PSPrivateMetadata) -and $PSPrivateMetadata.JobId)           { $ExecutionMode = 'AzureAutomation' }
-    elseif ($env:FUNCTIONS_WORKER_RUNTIME -or $env:AZURE_FUNCTIONS_ENVIRONMENT)             { $ExecutionMode = 'AzureFunction'   }
-    elseif ($env:GITHUB_ACTIONS -eq 'true')                                                 { $ExecutionMode = 'GitHubActions'   }
-    elseif ($env:GITLAB_CI -eq 'true')                                                      { $ExecutionMode = 'GitLabCI'        }
-    elseif ($env:TF_BUILD -eq 'True')                                                       { $ExecutionMode = 'AzureDevOps'     }
-    elseif ($env:_SMSTSType -or $env:_SMSTSPackageID -or $env:SMSTSLogPath)                 { $ExecutionMode = 'TaskSequence'    }
-    Write-Verbose "ExecutionMode = $($ExecutionMode) ExecutionPath = $($ExecutionPath) ExecutionSource = $($ExecutionSource) ExecutionIdentity = $($ExecutionIdentity) after environment variable check"
-
-    # If still standalone, Get execution mode from script path to determine if running as Remediation, Detection, Platformscript, Intunewin, Tasksequence, or from SCCM
-    if ($ExecutionMode -eq 'Standalone' -and $scriptPath) {
-        if     ($scriptPath -match 'IMECache\\HealthScripts\\.*\\remediate\.ps1$')          { $ExecutionMode = 'Remediation'    }
-        elseif ($scriptPath -match 'IMECache\\HealthScripts\\.*\\detect\.ps1$')             { $ExecutionMode = 'Detection'      }
-        elseif ($scriptPath -match 'IMECache\\Scripts\\')                                   { $ExecutionMode = 'PlatformScript' }
-        elseif ($scriptPath -match 'Microsoft Intune Management Extension\\Content\\')      { $ExecutionMode = 'Intunewin'      }
-        elseif ($scriptPath -match '_SMSTaskSequence\\')                                    { $ExecutionMode = 'TaskSequence'   }
-        elseif ($scriptPath -match '\\ccmcache\\')                                          { $ExecutionMode = 'SCCM'           }
+    # Cross-platform managed-host signals first (env vars and PSPrivateMetadata work on every platform)
+    if     ((Test-Path variable:PSPrivateMetadata) -and $PSPrivateMetadata.JobId)           { $CTXMode = 'AzureAutomation' }
+    elseif ($env:FUNCTIONS_WORKER_RUNTIME -or $env:AZURE_FUNCTIONS_ENVIRONMENT)             { $CTXMode = 'AzureFunction'   }
+    elseif ($env:GITHUB_ACTIONS -eq 'true')                                                 { $CTXMode = 'GitHubActions'   }
+    elseif ($env:GITLAB_CI -eq 'true')                                                      { $CTXMode = 'GitLabCI'        }
+    elseif ($env:TF_BUILD -eq 'True')                                                       { $CTXMode = 'AzureDevOps'     }
+    elseif ($env:_SMSTSType -or $env:_SMSTSPackageID -or $env:SMSTSLogPath)                 { $CTXMode = 'TaskSequence'    }
+    # Windows-only: WinPE detection requires HKLM provider
+    if ($CTXMode -eq 'Standalone' -and $isWin) {
+        try { if (Test-Path 'HKLM:\SYSTEM\ControlSet001\Control\MiniNT' -ErrorAction Stop) { $CTXMode = 'WinPE' } } catch {}
     }
-    Write-Verbose "ExecutionMode = $($ExecutionMode) ExecutionPath = $($ExecutionPath) ExecutionSource = $($ExecutionSource) ExecutionIdentity = $($ExecutionIdentity) after script path check"
+    Write-Verbose "Enumerated CTXMode = $CTXMode after environment variable check"
 
-    # If still standalone, Get execution mode from CIM and inspect parent processes for known hosts to determine if running by Intunewin, GPO, SCCM or Tasksequence
-    $private:procTable    = @{}
-    $private:ancestorPids = [System.Collections.Generic.List[int]]::new()
-    if ($ExecutionMode -eq 'Standalone') {
+    # If still standalone, get execution mode from script path (Remediation, Detection, PlatformScript, Intunewin, TaskSequence, SCCM)
+    if ($CTXMode -eq 'Standalone' -and $scriptPath) {
+        if     ($scriptPath -match 'IMECache\\HealthScripts\\.*\\remediate\.ps1$')          { $CTXMode = 'Remediation'    }
+        elseif ($scriptPath -match 'IMECache\\HealthScripts\\.*\\detect\.ps1$')             { $CTXMode = 'Detection'      }
+        elseif ($scriptPath -match 'IMECache\\Scripts\\')                                   { $CTXMode = 'PlatformScript' }
+        elseif ($scriptPath -match 'Microsoft Intune Management Extension\\Content\\')      { $CTXMode = 'Intunewin'      }
+        elseif ($scriptPath -match '_SMSTaskSequence\\')                                    { $CTXMode = 'TaskSequence'   }
+        elseif ($scriptPath -match '\\ccmcache\\')                                          { $CTXMode = 'SCCM'           }
+    }
+    Write-Verbose "Enumerated CTXMode = $CTXMode after script path check"
+
+    # If still standalone, walk parent processes via CIM (Windows-only) to detect Intunewin / GPO / SCCM / TaskSequence
+    [hashtable]$procTable = @{}
+    [System.Collections.Generic.List[int]]$ancestorPids = [System.Collections.Generic.List[int]]::new()
+    if ($CTXMode -eq 'Standalone' -and $isWin) {
         try {
-            $private:allProcs = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name -ErrorAction Stop -Verbose:$false
-            foreach ($p in $allProcs) { $procTable[[int]$p.ProcessId] = $p }
-        } catch {Write-Verbose "Get-ScriptExecutionContext: Failed to build process table with CIM, parent process detection will be unavailable. Error: $_"}
+            Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name -ErrorAction Stop -Verbose:$false |
+                ForEach-Object { $procTable[[int]$_.ProcessId] = $_ }
+        } catch { Write-Verbose "Failed to build process table with CIM: $_" }
         if ($procTable.Count -gt 0) {
-            $private:walkPid = $PID
-            while ($ancestorPids.Count -lt 8 -and $procTable.ContainsKey($walkPid)) {
-                $private:parentId = [int]$procTable[$walkPid].ParentProcessId
-                if ($parentId -eq 0 -or $parentId -eq $walkPid) { break }
-                $ancestorPids.Add($parentId)
-                $walkPid = $parentId
-            }
+            $ancestorPids = & $getAncestors $procTable
             foreach ($aPid in $ancestorPids) {
                 if (-not $procTable.ContainsKey($aPid)) { continue }
-                $private:procName = $procTable[$aPid].Name
-                if     ($procName -in 'AgentExecutor.exe','IntuneManagementExtension.exe')  { $ExecutionMode = 'Intunewin';    break }
-                elseif ($procName -eq 'gpscript.exe')                                       { $ExecutionMode = 'GPO';          break }
-                elseif ($procName -in 'CcmExec.exe','ccmsetup.exe')                         { $ExecutionMode = 'SCCM';         break }
-                elseif ($procName -in 'TSManager.exe','smstsbootstrap.exe')                 { $ExecutionMode = 'TaskSequence'; break }
+                $procName = $procTable[$aPid].Name
+                if     ($procName -in 'AgentExecutor.exe','IntuneManagementExtension.exe')  { $CTXMode = 'Intunewin';    break }
+                elseif ($procName -eq 'gpscript.exe')                                       { $CTXMode = 'GPO';          break }
+                elseif ($procName -in 'CcmExec.exe','ccmsetup.exe')                         { $CTXMode = 'SCCM';         break }
+                elseif ($procName -in 'TSManager.exe','smstsbootstrap.exe')                 { $CTXMode = 'TaskSequence'; break }
             }
         }
     }
-    Write-Verbose "ExecutionMode = $($ExecutionMode) ExecutionPath = $($ExecutionPath) ExecutionSource = $($ExecutionSource) ExecutionIdentity = $($ExecutionIdentity) after CIM process detection"
+    Write-Verbose "Enumerated CTXMode = $CTXMode after CIM process detection"
 
     # ---- Execution path detection -------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    # Check if running from a known folder like Program Files, imecontent, ProgramData, AppData imecache, or SystemRoot to determine if running from a well-known location or a random Other path
     if ($scriptRoot) {
-        $private:root = $scriptRoot.TrimEnd('\')
-        $private:sc   = [StringComparison]::OrdinalIgnoreCase
-        if     ($env:ProgramFiles        -and $root.StartsWith($env:ProgramFiles.TrimEnd('\'),                                                   $sc)) { $ExecutionPath = 'ProgramFiles'    }
-        elseif (${env:ProgramFiles(x86)} -and $root.StartsWith(${env:ProgramFiles(x86)}.TrimEnd('\') + '\Microsoft Intune Management Extension', $sc)) { $ExecutionPath = 'IMEContent'      }
-        elseif (${env:ProgramFiles(x86)} -and $root.StartsWith(${env:ProgramFiles(x86)}.TrimEnd('\'),                                            $sc)) { $ExecutionPath = 'ProgramFilesX86' }
-        elseif ($env:ProgramData         -and $root.StartsWith($env:ProgramData.TrimEnd('\'),                                                    $sc)) { $ExecutionPath = 'ProgramData'     }
-        elseif ($env:APPDATA             -and $root.StartsWith($env:APPDATA.TrimEnd('\'),                                                        $sc)) { $ExecutionPath = 'AppDataRoaming'  }
-        elseif ($env:LOCALAPPDATA        -and $root.StartsWith($env:LOCALAPPDATA.TrimEnd('\'),                                                   $sc)) { $ExecutionPath = 'AppDataLocal'    }
-        elseif ($env:SystemRoot          -and $root.StartsWith($env:SystemRoot.TrimEnd('\') + '\IMECache',                                       $sc)) { $ExecutionPath = 'IMECache'        }
-        elseif ($env:SystemRoot          -and $root.StartsWith($env:SystemRoot.TrimEnd('\') + '\ccmcache',                                       $sc)) { $ExecutionPath = 'CCMCache'        }
-        elseif ($env:SystemRoot          -and $root.StartsWith($env:SystemRoot.TrimEnd('\'),                                                     $sc)) { $ExecutionPath = 'SystemRoot'      }
+        $root = $scriptRoot.TrimEnd('\')
+        $sc   = [StringComparison]::OrdinalIgnoreCase
+        if     ($env:ProgramFiles        -and $root.StartsWith($env:ProgramFiles.TrimEnd('\'),                                                   $sc)) { $CTXPath = 'ProgramFiles'    }
+        elseif (${env:ProgramFiles(x86)} -and $root.StartsWith(${env:ProgramFiles(x86)}.TrimEnd('\') + '\Microsoft Intune Management Extension', $sc)) { $CTXPath = 'IMEContent'      }
+        elseif (${env:ProgramFiles(x86)} -and $root.StartsWith(${env:ProgramFiles(x86)}.TrimEnd('\'),                                            $sc)) { $CTXPath = 'ProgramFilesX86' }
+        elseif ($env:ProgramData         -and $root.StartsWith($env:ProgramData.TrimEnd('\'),                                                    $sc)) { $CTXPath = 'ProgramData'     }
+        elseif ($env:APPDATA             -and $root.StartsWith($env:APPDATA.TrimEnd('\'),                                                        $sc)) { $CTXPath = 'AppDataRoaming'  }
+        elseif ($env:LOCALAPPDATA        -and $root.StartsWith($env:LOCALAPPDATA.TrimEnd('\'),                                                   $sc)) { $CTXPath = 'AppDataLocal'    }
+        elseif ($env:SystemRoot          -and $root.StartsWith($env:SystemRoot.TrimEnd('\') + '\IMECache',                                       $sc)) { $CTXPath = 'IMECache'        }
+        elseif ($env:SystemRoot          -and $root.StartsWith($env:SystemRoot.TrimEnd('\') + '\ccmcache',                                       $sc)) { $CTXPath = 'CCMCache'        }
+        elseif ($env:SystemRoot          -and $root.StartsWith($env:SystemRoot.TrimEnd('\'),                                                     $sc)) { $CTXPath = 'SystemRoot'      }
     }
-    Write-Verbose "ExecutionMode = $($ExecutionMode) ExecutionPath = $($ExecutionPath) ExecutionSource = $($ExecutionSource) ExecutionIdentity = $($ExecutionIdentity) after path detection"
+    Write-Verbose "Enumerated CTXPath = $CTXPath after path detection"
 
-    # ---- Source detection ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    # Check process to determine if running from a scheduled task, remote session, VSCode debug session, ISE, Explorer, cmd or interactively in powershell. Only check if still in standalone mode
-    if ($ExecutionMode -eq 'Standalone') {
-        $ExecutionSource = 'Manual'
+    # ---- Source detection (Windows-only; relies on CIM and Windows hosts) ---------------------------------------------------------------------------------------------------------------------------
+    if ($CTXMode -eq 'Standalone') {
+        $CTXSource = 'Manual'
+        if ($isWin) {
+            try {
+                if ($procTable.Count -eq 0) {
+                    Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name -ErrorAction Stop -Verbose:$false |
+                        ForEach-Object { $procTable[[int]$_.ProcessId] = $_ }
+                    $ancestorPids = & $getAncestors $procTable
+                }
+                $parentName    = if ($ancestorPids.Count -gt 0 -and $procTable.ContainsKey($ancestorPids[0])) { $procTable[$ancestorPids[0]].Name } else { '' }
+                $ancestorNames = $ancestorPids | Where-Object { $procTable.ContainsKey($_) } | ForEach-Object { $procTable[$_].Name }
+                $svchostPid    = $ancestorPids | Where-Object { $procTable.ContainsKey($_) -and $procTable[$_].Name -eq 'svchost.exe' } | Select-Object -First 1
+                $svcNames      = if ($svchostPid) { @(Get-CimInstance Win32_Service -Filter "ProcessId=$svchostPid" -Property Name -ErrorAction SilentlyContinue | ForEach-Object Name) } else { @() }
+                if     ($svcNames -contains 'Schedule')                              { $CTXSource = 'ScheduledTask' }
+                elseif ($parentName -eq 'wsmprovhost.exe')                           { $CTXSource = 'RemoteSession' }
+                elseif ($Host.Name -eq 'Visual Studio Code Host' -or
+                        [bool]($ancestorNames -match '^Code( - Insiders)?\.exe$'))  { $CTXSource = 'VSCodeDebug'   }
+                elseif ($Host.Name -eq 'Windows PowerShell ISE Host')                { $CTXSource = 'ISE'           }
+                elseif ($parentName -eq 'explorer.exe')                              { $CTXSource = 'Explorer'      }
+                elseif ($parentName -eq 'cmd.exe')                                   { $CTXSource = 'Batch'         }
+                elseif ($parentName -in 'powershell.exe','pwsh.exe')                 { $CTXSource = 'Interactive'   }
+            } catch                                                                  { $CTXSource = 'Manual'        }
+        }
+    }
+    Write-Verbose "Enumerated CTXSource = $CTXSource after source detection"
+
+    # ---- Identity detection (Windows-only; WindowsIdentity throws on Linux/macOS pwsh) --------------------------------------------------------------------------------------------------------------
+    if ($isWin) {
         try {
-            # Build procTable if not already built (managed paths skipped CIM)
-            if ($procTable.Count -eq 0) {
-                Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name -ErrorAction Stop -Verbose:$false|
-                    ForEach-Object { $procTable[[int]$_.ProcessId] = $_ }
-                $private:walkPid = $PID
-                for ($private:i = 0; $i -lt 8; $i++) {
-                    if (-not $procTable.ContainsKey($walkPid)) { break }
-                    $private:parentId = [int]$procTable[$walkPid].ParentProcessId
-                    if ($parentId -eq 0 -or $parentId -eq $walkPid) { break }
-                    $ancestorPids.Add($parentId)
-                    $walkPid = $parentId
+            $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal       = [System.Security.Principal.WindowsPrincipal]$currentIdentity
+            if     ($currentIdentity.IsSystem)                                                                      { $CTXIdentity = 'System'         }
+            elseif ($currentIdentity.User.Value -eq 'S-1-5-19')                                                     { $CTXIdentity = 'LocalService'   }
+            elseif ($currentIdentity.User.Value -eq 'S-1-5-20')                                                     { $CTXIdentity = 'NetworkService' }
+            elseif ($currentIdentity.Name -like 'NT SERVICE\*' -or $currentIdentity.Name -like 'NT AUTHORITY\*')    { $CTXIdentity = 'ServiceAccount' }
+            elseif ($principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))             { $CTXIdentity = 'Admin'          }
+            else                                                                                                    { $CTXIdentity = 'User'           }
+        } catch { Write-Verbose "Failed to detect CTXIdentity, defaulting to 'User'. Error: $_" }
+    }
+    Write-Verbose "Enumerated CTXIdentity = $CTXIdentity after identity detection"
+
+    # ---- Architecture / PS version / OS build / pending reboot --------------------------------------------------------------------------------------------------------------------------------------
+    [string]$CTXArchitecture = if ([Environment]::Is64BitProcess) { 'x64' } else { 'x86' }
+    [version]$CTXPSVersion   = $PSVersionTable.PSVersion
+    [int]$CTXOSBuild         = if ($isWin) { [Environment]::OSVersion.Version.Build } else { 0 }
+    [bool]$CTXPendingReboot  = $false
+    if ($isWin) {
+        try {
+            if     (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')                                                                       { $CTXPendingReboot = $true }
+            elseif (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')                                                                      { $CTXPendingReboot = $true }
+            elseif ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name 'PendingFileRenameOperations' -ErrorAction SilentlyContinue).PendingFileRenameOperations) { $CTXPendingReboot = $true }
+        } catch { Write-Verbose "Failed to detect pending reboot state. Error: $_" }
+    }
+    Write-Verbose "Enumerated CTXArchitecture=$CTXArchitecture, CTXPSVersion=$CTXPSVersion, CTXOSBuild=$CTXOSBuild, CTXPendingReboot=$CTXPendingReboot"
+
+    [PSCustomObject]$CTX = [PSCustomObject]@{
+        CTXMode          = $CTXMode
+        CTXPath          = $CTXPath
+        CTXSource        = $CTXSource
+        CTXIdentity      = $CTXIdentity
+        CTXArchitecture  = $CTXArchitecture
+        CTXPSVersion     = $CTXPSVersion
+        CTXOSBuild       = $CTXOSBuild
+        CTXPendingReboot = $CTXPendingReboot
+    }
+
+    # ---- Requirement validation (only runs if any requirement parameter is provided) ---------------------------------------------------------------------------------------------------------------
+    [bool]$ok = $true
+    if ($CTXReqIdentity.Count -gt 0 -and $CTX.CTXIdentity -notin $CTXReqIdentity) {
+        Write-Error "Required identity: $($CTXReqIdentity -join '/'), actual: $($CTX.CTXIdentity)."
+        $ok = $false
+    }
+    if ($CTXReqMode.Count -gt 0 -and $CTX.CTXMode -notin $CTXReqMode) {
+        Write-Error "Required execution mode: $($CTXReqMode -join '/'), actual: $($CTX.CTXMode)."
+        $ok = $false
+    }
+    if ($CTXReqArchitecture -and $CTX.CTXArchitecture -ne $CTXReqArchitecture) {
+        if ($CTXAutoRelaunchToX64 -and $CTXReqArchitecture -eq 'x64' -and [Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+            # Resolve caller script path: prefer $script:PSCommandPath, else first call-stack frame with a ScriptName
+            [string]$callerScript = $scriptPath
+            if (-not $callerScript) {
+                foreach ($frame in (Get-PSCallStack)) {
+                    if ($frame.ScriptName) { $callerScript = $frame.ScriptName; break }
                 }
             }
-
-            # Detect ExecutionSource from parent process and ancestor services
-            $private:parentName  = if ($ancestorPids.Count -gt 0 -and $procTable.ContainsKey($ancestorPids[0])) { $procTable[$ancestorPids[0]].Name } else { '' }
-            $private:ancestorNames = $ancestorPids | Where-Object { $procTable.ContainsKey($_) } | ForEach-Object { $procTable[$_].Name }
-            $private:svchostPid  = $ancestorPids | Where-Object { $procTable.ContainsKey($_) -and $procTable[$_].Name -eq 'svchost.exe' } | Select-Object -First 1
-            $private:svcNames    = if ($svchostPid) { (Get-CimInstance Win32_Service -Filter "ProcessId=$svchostPid" -Property Name -ErrorAction SilentlyContinue).Name } else { @() }
-            if     ($svcNames -contains 'Schedule')                             { $ExecutionSource = 'ScheduledTask'  }
-            elseif ($parentName -eq 'wsmprovhost.exe')                          { $ExecutionSource = 'RemoteSession'  }
-            elseif ($Host.Name -eq 'Visual Studio Code Host' -or
-                    [bool]($ancestorNames -match '^Code( - Insiders)?\.exe$')) { $ExecutionSource = 'VSCodeDebug'    }
-            elseif ($Host.Name -eq 'Windows PowerShell ISE Host')               { $ExecutionSource = 'ISE'            }
-            elseif ($parentName -eq 'explorer.exe')                             { $ExecutionSource = 'Explorer'       }
-            elseif ($parentName -eq 'cmd.exe')                                  { $ExecutionSource = 'Batch'          }
-            elseif ($parentName -in 'powershell.exe', 'pwsh.exe')               { $ExecutionSource = 'Interactive'    }
-        } catch                                                                 { $ExecutionSource = 'Manual'         }
+            [string]$sysNative = "$env:SystemRoot\SysNative\WindowsPowerShell\v1.0\powershell.exe"
+            if (-not $callerScript -or -not (Test-Path -LiteralPath $callerScript)) {
+                Write-Error "CTXAutoRelaunchToX64 requires a file-based script (caller path '$callerScript' not resolvable). Architecture requirement failed."
+                return $null
+            }
+            if (-not (Test-Path -LiteralPath $sysNative)) {
+                Write-Error "CTXAutoRelaunchToX64 failed: '$sysNative' not found. Architecture requirement failed."
+                return $null
+            }
+            # Build a single -Command line that re-invokes the caller script with forwarded parameters
+            [string]$cmdLine = "& '" + ($callerScript -replace "'","''") + "'"
+            foreach ($k in $CTXForwardParameters.Keys) {
+                $v = $CTXForwardParameters[$k]
+                if     ($v -is [switch])  { if ($v.IsPresent) { $cmdLine += " -$k" } }
+                elseif ($v -is [bool])    { $cmdLine += " -${k}:`$$($v.ToString().ToLower())" }
+                elseif ($v -is [array])   { $cmdLine += " -$k '" + (($v | ForEach-Object { $_ -replace "'","''" }) -join "','") + "'" }
+                else                      { $cmdLine += " -$k '" + ($v.ToString() -replace "'","''") + "'" }
+            }
+            Write-Warning "Process is x86; relaunching as x64 via SysNative: $sysNative"
+            $proc = Start-Process -FilePath $sysNative -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command', $cmdLine) -Wait -NoNewWindow -PassThru
+            exit $proc.ExitCode  # exits the current script/host after the relaunched x64 process completes
+        }
+        Write-Error "Required architecture: $CTXReqArchitecture, actual: $($CTX.CTXArchitecture)."
+        $ok = $false
     }
-    Write-Verbose "ExecutionMode = $($ExecutionMode) ExecutionPath = $($ExecutionPath) ExecutionSource = $($ExecutionSource) ExecutionIdentity = $($ExecutionIdentity) after source detection"
-
-    # ---- Identity detection -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    # Detect identity — System, LocalService, NetworkService, ServiceAccount, Admin, or User (falls back to init value 'User' if detection fails)
-    try {
-        $private:currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-        $private:principal       = [System.Security.Principal.WindowsPrincipal]$currentIdentity
-        if     ($currentIdentity.IsSystem)                                                                      {$ExecutionIdentity = 'System'         }
-        elseif ($currentIdentity.User.Value -eq 'S-1-5-19')                                                     {$ExecutionIdentity = 'LocalService'   }
-        elseif ($currentIdentity.User.Value -eq 'S-1-5-20')                                                     {$ExecutionIdentity = 'NetworkService' }
-        elseif ($currentIdentity.Name -like 'NT SERVICE\*' -or $currentIdentity.Name -like 'NT AUTHORITY\*')    {$ExecutionIdentity = 'ServiceAccount' }
-        elseif ($principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))             {$ExecutionIdentity = 'Admin'          }
-        else                                                                                                    {$ExecutionIdentity = 'User'           }
-    } catch { Write-Verbose "Get-ScriptExecutionContext: Failed to detect identity, defaulting to 'User'. Error: $_" }
-
-    Write-Verbose "ExecutionMode = $($ExecutionMode) ExecutionPath = $($ExecutionPath) ExecutionSource = $($ExecutionSource) ExecutionIdentity = $($ExecutionIdentity) after identity detection"
-    [PSCustomObject]@{
-        ExecutionMode     = $ExecutionMode
-        ExecutionPath     = $ExecutionPath
-        ExecutionSource   = $ExecutionSource
-        ExecutionIdentity = $ExecutionIdentity
+    if ($CTXReqPSVersion -and $CTX.CTXPSVersion -lt $CTXReqPSVersion) {
+        Write-Error "Required minimum PowerShell version: $CTXReqPSVersion, actual: $($CTX.CTXPSVersion)."
+        $ok = $false
     }
+    if ($CTXReqOSBuild -gt 0 -and $CTX.CTXOSBuild -lt $CTXReqOSBuild) {
+        Write-Error "Required minimum OS build: $CTXReqOSBuild, actual: $($CTX.CTXOSBuild)."
+        $ok = $false
+    }
+    if ($CTXAbortIfPendingReboot -and $CTX.CTXPendingReboot) {
+        Write-Error "A reboot is pending on this machine. Aborting as -CTXAbortIfPendingReboot is set."
+        $ok = $false
+    }
+    if (-not $ok) { return $null }
+    return $CTX
 }
 Function Add-AddRemovePrograms {
     <#
@@ -1120,19 +1260,16 @@ Function Remove-AddRemovePrograms {
 # Start T-Bone custom logging (can be removed if you don't want to use T-Bone logging)
 Invoke-TboneLog -LogMode Start -Logname $LogName -LogToGUI $LogToGUI -LogToEventlog $LogToEventlog -LogEventIds $LogEventIds -LogToDisk $LogToDisk -LogPath $LogToDiskPath -LogToHost $LogToHost
 
-# Detect execution context
-$ScriptContext = Get-ScriptExecutionContext
+# Preflight: detect execution context + validate requirements (identity / architecture / mode), optional x86->x64 relaunch.
+$CTX = Get-ExecutionContext -CTXReqIdentity $CTXReqIdentity -CTXReqArchitecture $CTXReqArchitecture -CTXAutoRelaunchToX64:$CTXAutoRelaunchToX64 -CTXReqPSVersion $CTXReqPSVersion -CTXReqOSBuild $CTXReqOSBuild -CTXAbortIfPendingReboot:$CTXAbortIfPendingReboot -CTXForwardParameters $PSBoundParameters
+if (-not $CTX) { Invoke-TboneLog Stop; return }
 
-# Classify location and elevation
-[bool]$IsInstalled = $ScriptContext.ExecutionPath -in 'ProgramFiles','ProgramFilesX86','ProgramData'
-[bool]$IsElevated  = $ScriptContext.ExecutionIdentity -in 'System','Admin'
-
-# Hard-fail when the requested action requires HKLM/Program Files writes but we lack elevation.
-[bool]$NeedsElevation = -not ($IsInstalled -and $InstallType -eq 'Install')
-if ($NeedsElevation -and -not $IsElevated) {
-    Write-Error "InstallType '$InstallType' from '$($ScriptContext.ExecutionPath)' requires Admin/System (current identity: '$($ScriptContext.ExecutionIdentity)'). Aborting."
-    Invoke-TboneLog Stop
-    return
+# Derived flags + script-specific gate: elevation is required unless we're already installed AND doing a plain Install.
+[bool]$IsInstalled = $CTX.CTXPath     -in 'ProgramFiles','ProgramFilesX86','ProgramData'
+[bool]$IsElevated  = $CTX.CTXIdentity -in 'System','Admin'
+if (-not ($IsInstalled -and $InstallType -eq 'Install') -and -not $IsElevated) {
+    Write-Error "InstallType '$InstallType' from '$($CTX.CTXPath)' requires Admin/System (current identity: '$($CTX.CTXIdentity)'). Aborting."
+    Invoke-TboneLog Stop; return
 }
 
 # Check and add scripts as wrapped Un/installer scripts if provided, otherwise use the inline scripts defined in the function bodies 
@@ -1155,7 +1292,7 @@ if (-not [string]::IsNullOrWhiteSpace($ARPAppUnInstallScript)) {
     } else {Write-Warning "Uninstaller script file not found at '$ARPAppUnInstallScript'. Using inline uninstaller."}
 } else {Write-Verbose "No ARPAppUnInstallScript provided. Using inline uninstaller."}
 
-# Dispatch by Executionpath + InstallType Logic:
+# Dispatch by CTXPath + InstallType Logic:
 #   Installed + Install     : Run wrapped installer only (already staged)
 #   Staging   + Install     : Run wrapped installer -> Stage files -> Register ARP (version gate applies to staging/ARP only)
 #   Installed + ReInstall   : Run wrapped installer -> Re-stage files -> Re-register ARP
@@ -1167,10 +1304,10 @@ try {
     switch ($InstallType) {
         'Install' {
             if ($IsInstalled) {
-                Write-Verbose "Running Installmode from installed location ($($ScriptContext.ExecutionPath)) - running payload only"
+                Write-Verbose "Running Installmode from installed location ($($CTX.CTXPath)) - running payload only"
                 if ($PSCmdlet.ShouldProcess('Installer payload', 'Run installer script')) { & $WrappedInstallerScript }; break
             }
-            Write-Verbose "Running Installmode from staging ($($ScriptContext.ExecutionPath)) - run installer, then stage files and register ARP"
+            Write-Verbose "Running Installmode from staging ($($CTX.CTXPath)) - run installer, then stage files and register ARP"
             if ($PSCmdlet.ShouldProcess('Installer payload', 'Run installer script')) { & $WrappedInstallerScript }
             $null = Add-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppVersion $ARPAppVersion -ARPAppGuid $ARPAppGuid -ARPAppPublisher $ARPAppPublisher -ARPAppFolder $ARPAppFolder -ARPAppEnableUninstall $ARPAppEnableUninstall `
                 -ARPAppEnableModify $ARPAppEnableModify -ARPAppIcon $ARPAppIcon -ARPAppIconPath $ARPAppIconPath -ARPAppInstallScript $ARPAppInstallScript -ARPAppUnInstallScript $ARPAppUnInstallScript -ARPAppIncludeFolder $ARPAppIncludeFolder `
@@ -1179,7 +1316,7 @@ try {
         'ReInstall' {
             # No staging-path redirect for ReInstall: run the installer directly from wherever the script was launched.
             # When triggered via Add/Remove Programs, the reinstall.bat already calls the installed wrapper, so $IsInstalled will be true.
-            Write-Verbose "Running ReInstallmode from $($ScriptContext.ExecutionPath) (installed=$IsInstalled) - running installer then re-staging files and re-registering ARP."
+            Write-Verbose "Running ReInstallmode from $($CTX.CTXPath) (installed=$IsInstalled) - running installer then re-staging files and re-registering ARP."
             if ($PSCmdlet.ShouldProcess('Installer payload', 'Run installer script')) { & $WrappedInstallerScript }
             $null = Add-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppVersion $ARPAppVersion -ARPAppGuid $ARPAppGuid -ARPAppPublisher $ARPAppPublisher -ARPAppFolder $ARPAppFolder -ARPAppEnableUninstall $ARPAppEnableUninstall `
                 -ARPAppEnableModify $ARPAppEnableModify -ARPAppIcon $ARPAppIcon -ARPAppIconPath $ARPAppIconPath -ARPAppInstallScript $ARPAppInstallScript -ARPAppUnInstallScript $ARPAppUnInstallScript -ARPAppIncludeFolder $ARPAppIncludeFolder `
@@ -1187,16 +1324,16 @@ try {
         }
         'UnInstall' {
             if (-not $IsInstalled) {
-                write-verbose "Running UnInstallmode from staging location ($($ScriptContext.ExecutionPath)) - Redirecting to installed app folder for UnInstall execution."
+                write-verbose "Running UnInstallmode from staging location ($($CTX.CTXPath)) - Redirecting to installed app folder for UnInstall execution."
                 [string]$private:UninstallBatPath = Join-Path -Path $ARPAppFolder -ChildPath "uninstall-$ARPAppGuid.bat"
                 if (Test-Path -LiteralPath $UninstallBatPath) {
-                    Write-Verbose "Redirecting UnInstall from '$($ScriptContext.ExecutionPath)' to installed batch: $UninstallBatPath"
+                    Write-Verbose "Redirecting UnInstall from '$($CTX.CTXPath)' to installed batch: $UninstallBatPath"
                     if ($PSCmdlet.ShouldProcess($UninstallBatPath, 'Run installed batch (UnInstall)')) { & $UninstallBatPath }
                     break
                 }
                 Write-Verbose "No redirect batch found at $UninstallBatPath; continuing in-process UnInstall."
             }
-            Write-Verbose "Running UnInstallmode from installed location ($($ScriptContext.ExecutionPath)) - Running uninstaller and removing ARP."
+            Write-Verbose "Running UnInstallmode from installed location ($($CTX.CTXPath)) - Running uninstaller and removing ARP."
             if ($PSCmdlet.ShouldProcess('Uninstaller payload', 'Run uninstaller script')) { & $WrappedUnInstallerScript }
             Remove-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppGuid $ARPAppGuid -ARPAppFolder $ARPAppFolder -ARPAppPublisher $ARPAppPublisher
         }
