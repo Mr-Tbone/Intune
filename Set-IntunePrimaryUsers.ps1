@@ -101,6 +101,15 @@ param(
     [Parameter(Mandatory = $false,          HelpMessage = "Filter to keep specific accounts that always should be keept as primary owners ('Monitoring@tbone.se'). Default is blank")]
     [string[]]$KeepUserAccounts     = @(),
 
+    [Parameter(Mandatory = $false,          HelpMessage = "Regex to filter the groups from which to select the computers to be analyzed. Ex: '^INTUNE .*$'")]
+    [string[]]$IncludedGroupRegex   = @(),
+
+    [Parameter(Mandatory = $false,          HelpMessage = "Regex to filter the groups from which to select the computers to exclude from the analysis. Ex: '^INTUNE - (SHARED PCs|KIOSKs)$'")]
+    [string[]]$ExcludedGroupRegex   = @(),
+
+    [Parameter(Mandatory = $false,          HelpMessage = "Regex to filter valid UPNs as primary users. Ex: '^.*@contoso\.com$'")]
+    [string]$ValidUserUpnRegex      = "",
+
     [Parameter(Mandatory = $false,          HelpMessage = "Time period in days to retrieve user sign-in activity logs. Default is 30 days")]
     [ValidateRange(1,90)]
     [int]$SignInsTimeSpan           = 30,
@@ -200,7 +209,8 @@ param(
 [System.Collections.ArrayList]$RequiredScopes = @(  # Required Graph API permission scopes used in function Invoke-ConnectMgGraph
     "DeviceManagementManagedDevices.ReadWrite.All", # Read/write Intune device to set Primary Users
     "AuditLog.Read.All",                            # Read sign-in logs
-    "User.Read.All"                                 # Read users
+    "User.Read.All",                                # Read users
+    "GroupMember.Read.All"                          # Read group members
 )
 #endregion
 
@@ -258,6 +268,46 @@ if([string]::IsNullOrWhiteSpace($ReportTitle)) {[string]$ReportTitle = $ScriptAc
 #endregion
 
 #region ---------------------------------------------------[Functions]------------------------------------------------------------
+function Get-MgDeviceIdsFromGroupRegex {
+<#
+.SYNOPSIS
+    Retrieves the IDs (AzureAdDeviceId) of the devices that belong to the groups matching the regular expressions.
+#>
+    [CmdletBinding()]
+    param(
+        [string[]]$GroupRegexes
+    )
+    
+    [System.Collections.Generic.HashSet[string]]$DeviceIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    if (-not $GroupRegexes -or $GroupRegexes.Count -eq 0) { return $DeviceIds }
+
+    Write-Verbose "Searching for groups that match the Regex patterns..."
+    $AllGroups = Invoke-MgGraphRequestSingle -GraphMethod 'GET' -GraphObject 'groups' -GraphProperties 'id,displayName'
+    
+    [string]$CombinedRegex = ($GroupRegexes -join '|')
+    $MatchedGroups = $AllGroups | Where-Object { $_.displayName -match $CombinedRegex }
+    
+    Write-Verbose "$($MatchedGroups.Count) groups matching the patterns have been found."
+
+    foreach ($Group in $MatchedGroups) {
+        Write-Verbose "Retrieving transitive members of the group: $($Group.displayName)"
+        $Members = Invoke-MgGraphRequestSingle -GraphMethod 'GET' -GraphObject "groups/$($Group.id)/transitiveMembers" -GraphProperties 'deviceId' -GraphCount $true
+        
+        $MemberList = if ($null -ne $Members -and $Members.PSObject.Properties.Match('Items').Count -gt 0) { $Members.Items } else { $Members }
+        
+        if ($MemberList) {
+            foreach ($Member in $MemberList) {
+                if (
+                    $Member.'@odata.type' -eq '#microsoft.graph.device' -and
+                    -not [String]::IsNullOrEmpty($Member.deviceId)
+                    ) { [void]$DeviceIds.Add($Member.deviceId) }
+            }
+        }
+    }
+    
+    Write-Verbose "Total unique devices collected: $($DeviceIds.Count)"
+    return $DeviceIds
+}
 function Invoke-ConnectMgGraph {
 <#
 .SYNOPSIS
@@ -1626,6 +1676,24 @@ try {
                 if ($ExcludePattern) { Write-Verbose "Applied exclusion filter for $($ExcludedDeviceNames.Count) patterns" }
                 Write-Verbose "Remaining after filters: $($AllDevices.Count) devices"
             }
+            if ($IncludedGroupRegex -and $IncludedGroupRegex.Count -gt 0) {
+                Write-Verbose "Processing INCLUSION filtering by Regex groups..."
+                $IncludedDeviceIds = Get-MgDeviceIdsFromGroupRegex -GroupRegexes $IncludedGroupRegex
+                
+                [int]$PreFilterCount = @($AllDevices).Count
+                $AllDevices = $AllDevices | Where-Object { $IncludedDeviceIds.Contains($_.azureADDeviceId) }
+
+                Write-Verbose "Devices retained after applying group INCLUSION: $($AllDevices.Count)/${PreFilterCount}"
+            }
+
+            if ($ExcludedGroupRegex -and $ExcludedGroupRegex.Count -gt 0) {
+                Write-Verbose "Processing EXCLUSION filtering by Regex groups..."
+                $ExcludedDeviceIds = Get-MgDeviceIdsFromGroupRegex -GroupRegexes $ExcludedGroupRegex
+                
+                [int]$PreFilterCount = @($AllDevices).Count
+                $AllDevices = $AllDevices | Where-Object { -not $ExcludedDeviceIds.Contains($_.AzureAdDeviceId) }
+                Write-Verbose "Devices retained after applying group EXCLUSION:  $($AllDevices.Count)/${PreFilterCount}"
+            }
             # Create hashtable for fast lookups
             $AllDevicesByIdHash = Convert-PSObjectArrayToHashTables -PSObjectArray $AllDevices -IdProperties @('id')
             Write-Verbose "Created device lookup hashtable with $($AllDevicesByIdHash.Count) entries"
@@ -1811,6 +1879,16 @@ try {
                         } 
                         else {$ChunkResults}
                         
+                        # Filtering UPNs using regular expressions
+                        $FilteredLogs = if ($ValidUserUpnRegex) {
+                            [int]$PreCount = $FilteredLogs.Count
+                            [array]$RegexFiltered = @($FilteredLogs | Where-Object {
+                                $_.userPrincipalName -match $ValidUserUpnRegex
+                            })
+                            Write-Verbose "Login records retained after user Regex filtering ($ValidUserUpnRegex): $($RegexFiltered.Count)/${PreCount}"
+                            $RegexFiltered
+                        } else { $FilteredLogs }
+
                         # Group sign-ins by device ID efficiently
                         foreach ($SignIn in $FilteredLogs) {
                             [string]$DeviceId = $SignIn.deviceDetail.deviceId
