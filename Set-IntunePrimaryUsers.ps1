@@ -838,7 +838,7 @@ function Invoke-MgGraphRequestSingle {
                             }
                             if ($ErrorMessage -match "does not have intune license or is deleted" -or $FullErrorString -match "does not have intune license or is deleted") { # Check if no license, common for Intune queries
                                 Write-Warning "Object Deleted or User has no Intune license"
-                                return "$ErrorMessage (Object Deleted/No User License)"
+                                throw "$ErrorMessage (Object Deleted/No User License)"
                             }
                             # For DELETE operations, "not found" patterns mean already removed - treat as success
                             if ($GraphMethod -eq 'DELETE' -and ($ErrorMessage -imatch 'does not exist|not found|cannot be found|no longer exists|was not found|resource .+ not found' -or $FullErrorString -imatch 'does not exist|not found|cannot be found|no longer exists')) {
