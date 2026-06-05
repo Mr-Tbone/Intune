@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        3.1.2
+.VERSION        3.1.1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16e0
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -18,7 +18,6 @@
     3.0.4 2026-05-12 Fixed some cosmetics
     3.1.0 2026-06-05 Default to x64 execution: auto-relaunch from x86, ProgramW6432-based install path, x64 ARP/Uninstall registry hive
     3.1.1 2026-06-05 Fix Remove-AddRemovePrograms packed-GUID converter (was leaving HKCR\Installer\Products\<wrong-id> orphaned, causing Intune detection to keep finding the app after uninstall -> 0x87D1041D)
-    3.1.2 2026-06-05 Fixed some cosmetics
 #>
 
 <#
@@ -1483,4 +1482,3 @@ finally {
     Invoke-TboneLog Stop
 }
 #endregion
-
