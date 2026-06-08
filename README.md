@@ -31,7 +31,7 @@ Then assign the listed Microsoft Graph API permissions to the specified Managed 
 
 ## Intune - Drive Mapping.ps1 ([Remediation-MapDrivesCloudNative.ps1](<Remedations/Remediation-MapDrivesCloudNative.ps1>))
 > [!IMPORTANT]
-> Renamed to [Remediation-MapDrivesCloudNative.ps1](<Remedations/Remediation-MapDrivesCloudNative.ps1>) and moved to Remedations folder
+> Renamed to [Map-DrivesCloudNative.ps1](<Map-DrivesCloudNative.ps1>)
 
 This script will map drives and printers for cloud native devices
 It can be used as both script and remediation script in Intune.
@@ -45,7 +45,7 @@ Group memberships are queried via LDAP to determine which mappings apply to the 
 
 ## Intune - Printer Mapping.ps1 ([Remediation-MapPrintersCloudNative.ps1](<Remedations/Remediation-MapPrintersCloudNative.ps1>))
 > [!IMPORTANT]
-> Renamed to [Remediation-MapPrintersCloudNative.ps1](<Remedations/Remediation-MapPrintersCloudNative.ps1>) and moved to Remedations folder
+> Renamed to [Map-PrintersCloudNative.ps1](<Map-PrintersCloudNative.ps1>)
 
 This script will map drives and printers for cloud native devices
 It can be used as both script and remediation script in Intune.
