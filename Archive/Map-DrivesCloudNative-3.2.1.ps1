@@ -1,7 +1,7 @@
-<#PSScriptInfo
-.VERSION        3.2.2
+﻿<#PSScriptInfo
+.VERSION        3.2.1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
-.GUID           feedbeef-beef-4dad-beef-b628ccca16be
+.GUID           feedbeef-beef-4dad-beef-b628ccca16bd
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
 .TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
 .LICENSEURI     https://opensource.org/licenses/MIT
@@ -17,7 +17,6 @@
     3.1.1 2026-06-05 Fix Remove-AddRemovePrograms packed-GUID converter (was leaving HKCR\Installer\Products\<wrong-id> orphaned, causing Intune detection to keep finding the app after uninstall -> 0x87D1041D)
     3.2.0 2026-06-05 Minor update with new name on scripts
     3.2.1 2026-06-09 fix illegal chars
-    3.2.2 2026-06-09 fix illegal chars
 #>
 
 <#
@@ -37,19 +36,19 @@
     the script aborts mapping instead of continuing with incomplete group data. Optional stale drive or printer cleanup is also supported.
 
 .EXAMPLE
-    .\Map-PrintersCloudNative.ps1
+    .\Map-DrivesCloudNative.ps1
     Runs with default settings. As SYSTEM/Admin it installs or repairs the deployed worker and scheduled task; as a normal user it invokes the existing worker or runs the mapping logic for the current session.
 
 .EXAMPLE
-    .\Map-PrintersCloudNative.ps1 -LogVerboseEnabled $true -LogToDisk $true
+    .\Map-DrivesCloudNative.ps1 -LogVerboseEnabled $true -LogToDisk $true
     Runs with verbose logging enabled and writes the collected log to disk at script end.
 
 .EXAMPLE
-    .\Map-PrintersCloudNative.ps1 -InstallType UnInstall
+    .\Map-DrivesCloudNative.ps1 -InstallType UnInstall
     Removes the scheduled task, staged worker files, version marker, and Add/Remove Programs registration.
 
 .EXAMPLE
-    .\Map-PrintersCloudNative.ps1 -RemoveStaleObjects $true
+    .\Map-DrivesCloudNative.ps1 -RemoveStaleObjects $true
     Maps only the configured resources for the current user and removes stale mapped drives or printers that are no longer defined.
 
 .NOTES
@@ -85,11 +84,11 @@ param(
     # ==========> Add Application to Add Remove Program (Add-AddRemoveProgram) <===========================================
 
     [Parameter(Mandatory = $false,          HelpMessage = 'Name of the application/script being wrapped')]
-    [String]$ARPAppName             = "Map Printers",
+    [String]$ARPAppName             = "Map Drives",
 
     [Parameter(Mandatory = $false,          HelpMessage = 'GUID of the application/script being wrapped. NOTE: This needs to be unique for each wrapped app')]
     [ValidatePattern('^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$')]
-    [String]$ARPAppGuid             = "{feedbeef-beef-4dad-beef-b628ccca16be}",
+    [String]$ARPAppGuid             = "{feedbeef-beef-4dad-beef-b628ccca16bd}",
 
     [Parameter(Mandatory = $false,          HelpMessage = 'Version of the application. Increment when changing config')]
     [ValidatePattern("^\d+\.\d+\.\d+$")]
@@ -188,9 +187,10 @@ param(
 #Printers:  $MapObjects += @{PrinterName="PrinterName"  ;Default=$true      ;Path="\\printserver\printerName"   ;ADGroups="My Group"}
 #Drives:    $MapObjects += @{Letter="X"                 ;Persistent=$true   ;Path="\\fileserver\fileshare"      ;ADGroups="My Group"    ;Label="My drive"}
 $MapObjects = @()
-$MapObjects+=@{PrinterName=	"Printer1"	;Default=$false	;Path=	"\\T-Bone-Print.tbone.se\Printer1"	;ADGroups=	"Sales"	    }
-$MapObjects+=@{PrinterName=	"Printer2"	;Default=$false	;Path=	"\\T-Bone-Print.tbone.se\Printer2"	;ADGroups=	"Consultant"}
-$MapObjects+=@{PrinterName=	"Printer3"	;Default=$true	;Path=	"\\T-Bone-Print.tbone.se\Printer3"	;ADGroups=	""	        }
+$MapObjects+=@{Letter="S";Persistent=$true;Path="\\t-bone-file.tbone.se\Sales"	        ;ADGroups=	"Sales"	        ;Label="Sales folder"   }
+$MapObjects+=@{Letter="H";Persistent=$true;Path="\\t-bone-file.tbone.se\HR"             ;ADGroups=	"HR"            ;Label="HR"             }
+$MapObjects+=@{Letter="W";Persistent=$true;Path="\\t-bone-file.tbone.se\Consultants"	;ADGroups=	"Consultants"   ;Label="Consult"        }
+$MapObjects+=@{Letter="V";Persistent=$true;Path="\\t-bone-dc1.tbone.se\netlogon"	    ;ADGroups=	""              ;Label="Netlogon"       }
 #endregion
 
 #region ---------------------------------------------------[Set global script settings]--------------------------------------------
@@ -2714,4 +2714,3 @@ if ($EmitDetectOutput) {
 }
 exit $ScriptExitCode
 #endregion
-
