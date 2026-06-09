@@ -87,7 +87,6 @@ uninstall support, and modify/reinstall support.
 During user execution, the script can either trigger the deployed scheduled-task worker with a one-shot GUI override or run the mapping logic directly.
 Mapping applicability is determined from configured AD group names collected through LDAP after a DC Locator check. If no domain controller is reachable,
 the script aborts mapping instead of continuing with incomplete group data. Optional stale drive or printer cleanup is also supported.
-
 ## [Map-PrintersCloudNative.Ps1](<Map-PrintersCloudNative.Ps1>)
 Maps Intune-managed cloud-native drives or printers by scheduled task, manual run, or remediation workflow.
 
@@ -102,3 +101,4 @@ uninstall support, and modify/reinstall support.
 During user execution, the script can either trigger the deployed scheduled-task worker with a one-shot GUI override or run the mapping logic directly.
 Mapping applicability is determined from configured AD group names collected through LDAP after a DC Locator check. If no domain controller is reachable,
 the script aborts mapping instead of continuing with incomplete group data. Optional stale drive or printer cleanup is also supported.
+
