@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        3.3.0
+.VERSION        3.2.2
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16be
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -18,7 +18,6 @@
     3.2.0 2026-06-05 Minor update with new name on scripts
     3.2.1 2026-06-09 fix illegal chars
     3.2.2 2026-06-09 fix illegal chars
-    3.3.0 2026-06-14 Minor update to not overload Domain Controllers
 #>
 
 <#

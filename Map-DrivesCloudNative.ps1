@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        3.2.2
+.VERSION        3.3.0
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16bd
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -16,8 +16,7 @@
     3.1.0 2026-06-05 Default to x64 execution: auto-relaunch from x86, ProgramW6432-based install path, x64 ARP/Uninstall registry hive
     3.1.1 2026-06-05 Fix Remove-AddRemovePrograms packed-GUID converter (was leaving HKCR\Installer\Products\<wrong-id> orphaned, causing Intune detection to keep finding the app after uninstall -> 0x87D1041D)
     3.2.0 2026-06-05 Minor update with new name on scripts
-    3.2.1 2026-06-09 fix illegal chars
-    3.2.2 2026-06-09 fix illegal chars
+    3.3.0 2026-06-14 Minor update to not overload Domain Controllers
 #>
 
 <#
@@ -67,7 +66,7 @@ param(
     [String]$DomainName             = "tbone.se",
 
     [Parameter(Mandatory = $false, HelpMessage = "Mapping configuration version, increment when adding new or changing drive or printer mappings")]
-    [version]$MappingVersion        = "3.1.0",
+    [version]$MappingVersion        = "3.2.0",
 
     [Parameter(Mandatory = $false, HelpMessage = "Enable a GUI with mapping results when the user manually executes the script. Default is true.")]
     [Bool]$EndUserGUI               = $true,
@@ -191,6 +190,7 @@ $MapObjects = @()
 $MapObjects+=@{Letter="S";Persistent=$true;Path="\\t-bone-file.tbone.se\Sales"	        ;ADGroups=	"Sales"	        ;Label="Sales folder"   }
 $MapObjects+=@{Letter="H";Persistent=$true;Path="\\t-bone-file.tbone.se\HR"             ;ADGroups=	"HR"            ;Label="HR"             }
 $MapObjects+=@{Letter="W";Persistent=$true;Path="\\t-bone-file.tbone.se\Consultants"	;ADGroups=	"Consultants"   ;Label="Consult"        }
+$MapObjects+=@{Letter="G";Persistent=$true;Path="\\t-bone-file.tbone.se\Common" 	    ;ADGroups=	""              ;Label="Common"         }
 $MapObjects+=@{Letter="V";Persistent=$true;Path="\\t-bone-dc1.tbone.se\netlogon"	    ;ADGroups=	""              ;Label="Netlogon"       }
 #endregion
 
@@ -215,6 +215,9 @@ $firstMapObject = $MapObjects[0]
 if ($firstMapObject.ContainsKey('Letter'))          {$ObjectType = 'Drive'}
 elseif ($firstMapObject.ContainsKey('PrinterName')) {$ObjectType = 'Printer'}
 else {throw "Unknown MapObject type: First object must contain 'Letter' or 'PrinterName' key"}
+
+# Build the unique list of AD group names referenced in $MapObjects. Used to scope LDAP queries to only those groups
+[string[]]$RequiredGroups       = @($MapObjects | ForEach-Object { $_['ADGroups'] } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 
 # Set Names and Paths based on ObjectType for scripts and scheduled task
 [string]$UsersGroupSid          = "S-1-5-32-545"    # Built-in Users group, used for scheduled task
@@ -1508,26 +1511,31 @@ function Test-MapObjectValidation {
 function Get-ADGroupMemberships {
 <#
 .SYNOPSIS
-    Gets the AD group memberships for the current user using LDAP.
+    Resolves which of the configured AD groups the current user belongs to.
 .DESCRIPTION
-    Queries Active Directory via LDAP to get all group memberships (including nested) for the currently logged-in user.
-    This is due to the fact that in Windows there is no list of group memberships available locally on a cloud native device
-    It assumes domain connectivity, therwise it will not be able to map drives and printers based on group membership.
-.NOTES
+    Determines which configured AD groups the current user belongs to.
+    Prefers the local Kerberos token to minimize DC load and avoid unnecessary LDAP queries.
+    Falls back to a single scoped LDAP query only when on-prem group SIDs are not available.
+    Returns the matched required group names, resolving the primary group only when needed..NOTES
     Author:  @MrTbone_se (T-bone Granheden)
-    Version: 2.0
+    Version: 3.0
 
     Version History:
     1.0 - Initial version
     2.0 - Modified connectivity test, added primary group and improved error handling
+    3.0 - Added required-group scoping; Kerberos PAC/token path with scoped LDAP fallback to minimize DC load
 #>
     [CmdletBinding()]
     [OutputType([System.Collections.Generic.List[String]])]
     param(
-        [Parameter(Mandatory = $false,          HelpMessage='Domain to search for AD group memberships (e.g., ''contoso.com'').')]
+        [Parameter(Mandatory = $false,          HelpMessage = 'Domain to search for group memberships')]
         [string]$Domain = $env:USERDNSDOMAIN,
-        # Optional ref - set to $false when DsGetDcName reports no DC; $true otherwise
-        [ref]$DCAvailable = $null
+
+        [Parameter(Mandatory = $false,          HelpMessage = 'Optional ref that returns if a DC is available')]
+        [ref]$DCAvailable = $null,
+
+        [Parameter(Mandatory = $false,          HelpMessage = 'Optional group names to limit the membership lookup')]
+        [string[]]$RequiredGroups = @()
     )
     
     begin {
@@ -1581,7 +1589,141 @@ function Get-ADGroupMemberships {
                 }
             }
             finally {if ($ptr -ne [IntPtr]::Zero) { [Native.Netapi]::NetApiBufferFree($ptr) | Out-Null }}
-           
+
+            # Short-circuit: no group-scoped mappings configured, so no LDAP search is required.
+            if (-not $RequiredGroups -or $RequiredGroups.Count -eq 0) {
+                Write-Verbose "No RequiredGroups supplied - skipping LDAP group enumeration to spare DC load"
+                return $GroupMembershipList
+            }
+            # Kerberos token path (preferred): zero LDAP queries. The TGT issued by the DC carries every group SID for the user.
+            $useFallback = $false
+            try {
+                # Trigger TGT refresh via a single SMB auth call to the DC
+                try { $null = Test-Path -LiteralPath "\\$Domain\SYSVOL" -ErrorAction SilentlyContinue } catch {}
+                # Translate ONLY the configured group names to SIDs
+                $netBiosDomain = $env:USERDOMAIN
+                $translated = @{}
+                # Step 1: LSA (skipped silently when authority cannot be resolved)
+                foreach ($groupName in $RequiredGroups) {
+                    $authoritiesToTry = @()
+                    if ($netBiosDomain)              { $authoritiesToTry += $netBiosDomain }    # 1: NetBIOS domain (most reliable)
+                    $authoritiesToTry += $null                                                  # 2: bare name (LSA uses default domain)
+                    if ($Domain -and $Domain -ne $netBiosDomain) { $authoritiesToTry += $Domain }  # 3: DNS domain (last resort)
+                    foreach ($authority in $authoritiesToTry) {
+                        try {
+                            $nt  = if ($authority) { [System.Security.Principal.NTAccount]::new($authority, $groupName) }
+                                   else            { [System.Security.Principal.NTAccount]::new($groupName) }
+                            $sid = $nt.Translate([System.Security.Principal.SecurityIdentifier])
+                            $translated[$groupName] = $sid.Value
+                            break
+                        }
+                        catch { } # Try next authority; failures are expected on Entra-joined CKT devices
+                    }
+                }
+
+                # Step 2: If LSA could not resolve like Cloud Native with Kerberos Cloud Trust, do ONE flat indexed LDAP query
+                $unresolvedNames = @($RequiredGroups | Where-Object { -not $translated.ContainsKey($_) })
+                if ($unresolvedNames.Count -gt 0) {
+                    $sidLookupSearcher = $null
+                    $sidLookupResults  = $null
+                    try {
+                        $sidLookupSearcher = [System.DirectoryServices.DirectorySearcher]::new()
+                        $sidLookupSearcher.SearchRoot     = [ADSI]"LDAP://$Domain"
+                        $sidLookupSearcher.SearchScope    = [System.DirectoryServices.SearchScope]::Subtree
+                        $sidLookupSearcher.ServerTimeLimit = [TimeSpan]::FromSeconds(15)
+                        $nameClauses = ($unresolvedNames | ForEach-Object {
+                            '(name=' + ($_ -replace '([\\*\(\)\x00/])','\\$1') + ')'
+                        }) -join ''
+                        if ($unresolvedNames.Count -gt 1) { $nameClauses = "(|$nameClauses)" }
+                        $sidLookupSearcher.Filter = "(&(objectCategory=group)$nameClauses)"
+                        $null = $sidLookupSearcher.PropertiesToLoad.Add("name")
+                        $null = $sidLookupSearcher.PropertiesToLoad.Add("objectSid")
+                        Write-Verbose "Token path: resolving $($unresolvedNames.Count) group name(s) to SIDs via single flat LDAP query"
+                        $sidLookupResults = $sidLookupSearcher.FindAll()
+                        foreach ($r in $sidLookupResults) {
+                            if ($r.Properties["name"].Count -gt 0 -and $r.Properties["objectSid"].Count -gt 0) {
+                                $resName = $r.Properties["name"][0]
+                                $sidBytes = $r.Properties["objectSid"][0]
+                                try {
+                                    $sidObj = [System.Security.Principal.SecurityIdentifier]::new($sidBytes, 0)
+                                    if ($RequiredGroups -contains $resName) { $translated[$resName] = $sidObj.Value }
+                                } catch { Write-Verbose "Token path: failed to construct SID for '$resName': $($_.Exception.Message)" }
+                            }
+                        }
+                    }
+                    catch {
+                        Write-Verbose "Token path: flat LDAP SID lookup failed: $($_.Exception.Message)"
+                    }
+                    finally {
+                        if ($sidLookupResults)  { $sidLookupResults.Dispose() }
+                        if ($sidLookupSearcher) { $sidLookupSearcher.Dispose() }
+                    }
+                }
+
+                $stillUnresolved = @($RequiredGroups | Where-Object { -not $translated.ContainsKey($_) })
+                if ($stillUnresolved.Count -gt 0) {
+                    Write-Verbose "Token path: unable to resolve SIDs for: $($stillUnresolved -join ', ')"
+                }
+
+                if ($translated.Count -eq 0) {
+                    Write-Verbose "Token path: no configured groups could be resolved to SIDs - falling back to scoped LDAP"
+                    $useFallback = $true
+                }
+                else {
+                    # Read the user's transitive group SIDs straight from the local Windows token. No DC traffic.
+                    $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+                    $tokenSidSet     = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                    if ($currentIdentity.Groups) {
+                        foreach ($grp in $currentIdentity.Groups) {
+                            try { [void]$tokenSidSet.Add($grp.Value) } catch {}
+                        }
+                    }
+
+                    # Sanity check: the token must contain at least one SID
+                    $sampleSid       = ($translated.Values | Select-Object -First 1)
+                    $domainSidPrefix = $null
+                    if ($sampleSid) {
+                        $sidParts = $sampleSid -split '-'
+                        # AD domain group SID layout: S-1-5-21-<a>-<b>-<c>-<RID> -> 8 segments, prefix = first 7
+                        if ($sidParts.Count -ge 8 -and $sidParts[0] -eq 'S' -and $sidParts[2] -eq '5' -and $sidParts[3] -eq '21') {
+                            $domainSidPrefix = ($sidParts[0..6]) -join '-'
+                        }
+                    }
+                    $tokenHasOnpremGroups = $false
+                    if ($domainSidPrefix) {
+                        foreach ($s in $tokenSidSet) {
+                            if ($s.StartsWith("$domainSidPrefix-", [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $tokenHasOnpremGroups = $true
+                                break
+                            }
+                        }
+                    }
+
+                    if (-not $tokenHasOnpremGroups) {
+                        Write-Verbose "Token path: user token has no SIDs from the on-prem domain - falling back to scoped LDAP"
+                        $useFallback = $true
+                    }
+                    else {
+                        # Intersect translated required-group SIDs with the token.
+                        foreach ($groupName in $RequiredGroups) {
+                            if ($translated.ContainsKey($groupName) -and $tokenSidSet.Contains($translated[$groupName])) {
+                                $GroupMembershipList.Add($groupName)
+                            }
+                        }
+                        Write-Verbose "Token path: matched $($GroupMembershipList.Count) of $($RequiredGroups.Count) configured group(s) via Kerberos token (no LDAP issued)"
+                        return $GroupMembershipList
+                    }
+                }
+            }
+            catch {
+                Write-Verbose "Token path failed unexpectedly, falling back to scoped LDAP: $($_.Exception.Message)"
+                $useFallback = $true
+            }
+
+            # If we reach this point the token path was not conclusive and we fall through to the scoped LDAP
+            if (-not $useFallback) { return $GroupMembershipList }
+            Write-Verbose "Falling back to scoped LDAP query for $($RequiredGroups.Count) configured group(s)"
+
             # Create DirectorySearcher and find user
             $ADsearcher = [System.DirectoryServices.DirectorySearcher]::new()
             $ADsearcher.SearchRoot = [ADSI]"LDAP://$Domain"
@@ -1596,13 +1738,18 @@ function Get-ADGroupMemberships {
                 Write-Error "Failed to find user $UserPrincipalName in directory"
                 return $GroupMembershipList
             }
-            
-            # Query direct and nested group memberships using LDAP_MATCHING_RULE_IN_CHAIN
+
+            # Build a single LDAP filter that asks the DC ONLY about the configured groups
             $distinguishedName = $UserResult.Properties["distinguishedname"][0]
             $escapedDN = $distinguishedName -replace '([\\*\(\)\x00/])','\\$1' # Escape LDAP special characters
-            $ADsearcher.Filter = "(member:1.2.840.113556.1.4.1941:=$escapedDN)"
+            $nameClauses = ($RequiredGroups | ForEach-Object {
+                '(name=' + ($_ -replace '([\\*\(\)\x00/])','\\$1') + ')'
+            }) -join ''
+            if ($RequiredGroups.Count -gt 1) { $nameClauses = "(|$nameClauses)" }
+            $ADsearcher.Filter = "(&(objectCategory=group)$nameClauses(member:1.2.840.113556.1.4.1941:=$escapedDN))"
             $ADsearcher.PropertiesToLoad.Clear()
             $null = $ADsearcher.PropertiesToLoad.Add("name")
+            Write-Verbose "Querying $($RequiredGroups.Count) configured group(s) with scoped chain filter"
             $GroupsResults = $ADsearcher.FindAll()
             if ($GroupsResults.Count -gt 0) {
                 foreach ($result in $GroupsResults) {
@@ -1610,19 +1757,25 @@ function Get-ADGroupMemberships {
                     if ($groupName.Count -gt 0) { $GroupMembershipList.Add($groupName[0]) }
                 }
             }
-            
-            # Add primary group (e.g., "Domain Users") - not returned by LDAP_MATCHING_RULE_IN_CHAIN
-            $primaryGroupID = $UserResult.Properties["primarygroupid"]
-            if ($primaryGroupID.Count -gt 0) {
-                $domainSID = ([ADSI]"LDAP://$Domain").objectSid[0]
-                $domainSIDString = (New-Object System.Security.Principal.SecurityIdentifier($domainSID, 0)).Value
-                $primaryGroupSID = "$domainSIDString-$($primaryGroupID[0])"
-                $ADsearcher.Filter = "(objectSid=$primaryGroupSID)"
-                $ADsearcher.PropertiesToLoad.Clear()
-                $null = $ADsearcher.PropertiesToLoad.Add("name")
-                $PrimaryGroupResult = $ADsearcher.FindOne()
-                if ($PrimaryGroupResult -and $PrimaryGroupResult.Properties["name"].Count -gt 0) {
-                    $GroupMembershipList.Add($PrimaryGroupResult.Properties["name"][0])
+
+            # Primary group (e.g. "Domain Users") is NOT returned by LDAP_MATCHING_RULE_IN_CHAIN.
+            $unresolved = @($RequiredGroups | Where-Object { $_ -notin $GroupMembershipList })
+            if ($unresolved.Count -gt 0) {
+                $primaryGroupID = $UserResult.Properties["primarygroupid"]
+                if ($primaryGroupID.Count -gt 0) {
+                    $domainSID = ([ADSI]"LDAP://$Domain").objectSid[0]
+                    $domainSIDString = (New-Object System.Security.Principal.SecurityIdentifier($domainSID, 0)).Value
+                    $primaryGroupSID = "$domainSIDString-$($primaryGroupID[0])"
+                    $ADsearcher.Filter = "(objectSid=$primaryGroupSID)"
+                    $ADsearcher.PropertiesToLoad.Clear()
+                    $null = $ADsearcher.PropertiesToLoad.Add("name")
+                    $PrimaryGroupResult = $ADsearcher.FindOne()
+                    if ($PrimaryGroupResult -and $PrimaryGroupResult.Properties["name"].Count -gt 0) {
+                        $primaryName = $PrimaryGroupResult.Properties["name"][0]
+                        # Only add if it satisfies an outstanding required group, to keep the result
+                        # list aligned with the caller's intent.
+                        if ($primaryName -in $unresolved) { $GroupMembershipList.Add($primaryName) }
+                    }
                 }
             }
             
@@ -2567,7 +2720,7 @@ try {
                         }
                         elseif (-not $ExistingTask) {Write-Warning "Scheduled task '$TaskName' not found - running mapping directly"}
                         $dcOk               = $true
-                        $UserGroups         = Get-ADGroupMemberships -Domain $DomainName -DCAvailable ([ref]$dcOk)
+                        $UserGroups         = Get-ADGroupMemberships -Domain $DomainName -RequiredGroups $RequiredGroups -DCAvailable ([ref]$dcOk)
                         if (-not $dcOk) {
                             $dcMsg = $DomainName
                             if ($EndUserGUI -and -not $CTX.CTXNoGUISupport) {
@@ -2640,7 +2793,7 @@ try {
                     }
                     write-Verbose "Scheduled task execution with GUI $(if ($oneShot) { 'enabled' } else { 'disabled' })"
                     $dcOk               = $true
-                    $UserGroups         = Get-ADGroupMemberships -Domain $DomainName -DCAvailable ([ref]$dcOk)
+                    $UserGroups         = Get-ADGroupMemberships -Domain $DomainName -RequiredGroups $RequiredGroups -DCAvailable ([ref]$dcOk)
                     if (-not $dcOk) {
                         $dcMsg = $DomainName
                         if ($oneShot) {
@@ -2715,4 +2868,3 @@ if ($EmitDetectOutput) {
 }
 exit $ScriptExitCode
 #endregion
-
