@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        3.5.0
+.VERSION        3.4.0
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16be
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -20,7 +20,6 @@
     3.2.2 2026-06-09 fix illegal chars
     3.3.0 2026-06-14 Minor update to not overload Domain Controllers
     3.4.0 2026-06-15 Minor update with a function to remove legacy Mr T-Bone scripts to migrate to the new version
-    3.5.0 2026-06-16 Minor update to move redundant tasks to scriptblocks
 #>
 
 <#

@@ -1,7 +1,7 @@
-<#PSScriptInfo
-.VERSION        3.5.0
+﻿<#PSScriptInfo
+.VERSION        3.4.0
 .AUTHOR         @MrTbone_se (T-bone Granheden)
-.GUID           feedbeef-beef-4dad-beef-b628ccca16be
+.GUID           feedbeef-beef-4dad-beef-b628ccca16bd
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
 .TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
 .LICENSEURI     https://opensource.org/licenses/MIT
@@ -16,45 +16,35 @@
     3.1.0 2026-06-05 Default to x64 execution: auto-relaunch from x86, ProgramW6432-based install path, x64 ARP/Uninstall registry hive
     3.1.1 2026-06-05 Fix Remove-AddRemovePrograms packed-GUID converter (was leaving HKCR\Installer\Products\<wrong-id> orphaned, causing Intune detection to keep finding the app after uninstall -> 0x87D1041D)
     3.2.0 2026-06-05 Minor update with new name on scripts
-    3.2.1 2026-06-09 fix illegal chars
-    3.2.2 2026-06-09 fix illegal chars
     3.3.0 2026-06-14 Minor update to not overload Domain Controllers
     3.4.0 2026-06-15 Minor update with a function to remove legacy Mr T-Bone scripts to migrate to the new version
-    3.5.0 2026-06-16 Minor update to move redundant tasks to scriptblocks
 #>
 
 <#
 .SYNOPSIS
-    Maps Intune-managed cloud-native drives or printers by scheduled task, manual run, or remediation workflow.
+    Maps Intune-managed cloud-native drives or printers.
 
 .DESCRIPTION
-    This script deploys and runs a drive-mapping or printer-mapping solution for Entra ID joined / cloud-native Windows devices.
-    It supports Intune Win32 app install, Intune remediation, elevated manual install/repair, normal user manual execution, and uninstall.
+    Deploys and runs a drive or printer mapping solution for Entra ID joined / cloud-native Windows devices.
+    Supports Intune Win32 app install, Intune remediation, manual install/repair, normal user execution, and uninstall.
 
-    During install or remediation, the script stages itself into the application folder, registers a hidden scheduled task that runs in user context,
-    writes a launcher script, stores a version marker, and optionally registers the solution in Add/Remove Programs with icon, shortcuts,
-    uninstall support, and modify/reinstall support.
+    During install or remediation, the script stages itself, registers a hidden user-context scheduled task, writes a launcher,
+    stores a version marker, and can register Add/Remove Programs entries, shortcuts, uninstall, and modify support.
 
-    During user execution, the script can either trigger the deployed scheduled-task worker with a one-shot GUI override or run the mapping logic directly.
-    Mapping applicability is determined from configured AD group names collected through LDAP after a DC Locator check. If no domain controller is reachable,
-    the script aborts mapping instead of continuing with incomplete group data. Optional stale drive or printer cleanup is also supported.
+    During user execution, it can start the deployed worker with a one-shot GUI override or run mapping directly.
+    Mapping is filtered by configured AD groups resolved through LDAP after a DC Locator check.
 
 .EXAMPLE
-    .\Map-PrintersCloudNative.ps1
-    Runs with default settings. As SYSTEM/Admin it installs or repairs the deployed worker and scheduled task; as a normal user it invokes the existing worker or runs the mapping logic for the current session.
+    .\Map-DrivesCloudNative.ps1
+    Runs with default settings. As SYSTEM/Admin it installs or repairs the worker and scheduled task; as a normal user it starts the existing worker or runs mapping for the current session.
 
 .EXAMPLE
-    .\Map-PrintersCloudNative.ps1 -LogVerboseEnabled $true -LogToDisk $true
-    Runs with verbose logging enabled and writes the collected log to disk at script end.
+    .\Map-DrivesCloudNative.ps1 -LogVerboseEnabled $true -LogToDisk $true
+    Runs with verbose logging enabled and writes the log to disk at script end.
 
 .EXAMPLE
-    .\Map-PrintersCloudNative.ps1 -InstallType UnInstall
+    .\Map-DrivesCloudNative.ps1 -InstallType UnInstall
     Removes the scheduled task, staged worker files, version marker, and Add/Remove Programs registration.
-
-.EXAMPLE
-    .\Map-PrintersCloudNative.ps1 -RemoveStaleObjects $true
-    Maps only the configured resources for the current user and removes stale mapped drives or printers that are no longer defined.
-
 
 .NOTES
     Please feel free to use this, but make sure to credit @MrTbone_se as the original author
@@ -98,7 +88,7 @@ param(
 
     # ==========> Add Application to Add Remove Program (Add-AddRemoveProgram) <===========================================
     [Parameter(Mandatory = $false,          HelpMessage = 'Name of the application/script being wrapped')]
-    [String]$ARPAppName             = "Map Printers",
+    [String]$ARPAppName             = "Map Drives",
 
     [Parameter(Mandatory = $false,          HelpMessage = 'Company name used for naming of folders and registry keys')]
     [String]$ARPAppPublisher        = "T-Bone Consulting",
@@ -123,7 +113,7 @@ param(
 
     [Parameter(Mandatory = $false,          HelpMessage = 'GUID of the application/script being wrapped. NOTE: This needs to be unique for each wrapped app')]
     [ValidatePattern('^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$')]
-    [String]$ARPAppGuid             = "{feedbeef-beef-4dad-beef-b628ccca16be}",
+    [String]$ARPAppGuid             = "{feedbeef-beef-4dad-beef-b628ccca16bd}",
 
     [Parameter(Mandatory = $false,          HelpMessage = "Application folder path, if not specified, it will use the native 64-bit %ProgramFiles%\ARPPublisher\ARPAppName (via %ProgramW6432% so a 32-bit host does not get redirected to 'Program Files (x86)'). Falls back to %ProgramFiles% on a 32-bit OS where ProgramW6432 is unset.")]
     [string]$ARPAppFolder           = "$(if (${env:ProgramW6432}) { ${env:ProgramW6432} } else { $env:ProgramFiles })\$ARPAppPublisher\$ARPAppName",
@@ -161,9 +151,11 @@ param(
 #Printers:  $MapObjects += @{PrinterName="PrinterName"  ;Default=$true      ;Path="\\printserver\printerName"   ;ADGroups="My Group"}
 #Drives:    $MapObjects += @{Letter="X"                 ;Persistent=$true   ;Path="\\fileserver\fileshare"      ;ADGroups="My Group"    ;Label="My drive"}
 $MapObjects = @()
-$MapObjects+=@{PrinterName=	"Printer1"	;Default=$false	;Path=	"\\T-Bone-Print.tbone.se\Printer1"	;ADGroups=	"Sales"	    }
-$MapObjects+=@{PrinterName=	"Printer2"	;Default=$false	;Path=	"\\T-Bone-Print.tbone.se\Printer2"	;ADGroups=	"Consultant"}
-$MapObjects+=@{PrinterName=	"Printer3"	;Default=$true	;Path=	"\\T-Bone-Print.tbone.se\Printer3"	;ADGroups=	""	        }
+$MapObjects+=@{Letter="S";Persistent=$true;Path="\\t-bone-file.tbone.se\Sales"	        ;ADGroups=	"Sales"	        ;Label="Sales folder"   }
+$MapObjects+=@{Letter="H";Persistent=$true;Path="\\t-bone-file.tbone.se\HR"             ;ADGroups=	"HR"            ;Label="HR"             }
+$MapObjects+=@{Letter="W";Persistent=$true;Path="\\t-bone-file.tbone.se\Consultants"	;ADGroups=	"Consultants"   ;Label="Consult"        }
+$MapObjects+=@{Letter="G";Persistent=$true;Path="\\t-bone-file.tbone.se\Common" 	    ;ADGroups=	""              ;Label="Common"         }
+$MapObjects+=@{Letter="V";Persistent=$true;Path="\\t-bone-dc1.tbone.se\netlogon"	    ;ADGroups=	""              ;Label="Netlogon"       }
 #endregion
 
 #region ---------------------------------------------------[Set global script settings]--------------------------------------------

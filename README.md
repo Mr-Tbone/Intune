@@ -74,19 +74,17 @@ It will copy the script and icon to program files and add the necessary registry
 The PowerShell based app can be installed, uninstalled and reinstalled from Add/Remove Programs and also show the app version and icon.
 
 ## [Map-DrivesCloudNative.ps1](<Map-DrivesCloudNative.ps1>)
-Maps Intune-managed cloud-native drives or printers by scheduled task, manual run, or remediation workflow.
+Maps Intune-managed cloud-native drives or printers.
 
 ### Description
-This script deploys and runs a drive-mapping or printer-mapping solution for Entra ID joined / cloud-native Windows devices.
-It supports Intune Win32 app install, Intune remediation, elevated manual install/repair, normal user manual execution, and uninstall.
+Deploys and runs a drive or printer mapping solution for Entra ID joined / cloud-native Windows devices.
+Supports Intune Win32 app install, Intune remediation, manual install/repair, normal user execution, and uninstall.
 
-During install or remediation, the script stages itself into the application folder, registers a hidden scheduled task that runs in user context,
-writes a launcher script, stores a version marker, and optionally registers the solution in Add/Remove Programs with icon, shortcuts,
-uninstall support, and modify/reinstall support.
+During install or remediation, the script stages itself, registers a hidden user-context scheduled task, writes a launcher,
+stores a version marker, and can register Add/Remove Programs entries, shortcuts, uninstall, and modify support.
 
-During user execution, the script can either trigger the deployed scheduled-task worker with a one-shot GUI override or run the mapping logic directly.
-Mapping applicability is determined from configured AD group names collected through LDAP after a DC Locator check. If no domain controller is reachable,
-the script aborts mapping instead of continuing with incomplete group data. Optional stale drive or printer cleanup is also supported.
+During user execution, it can start the deployed worker with a one-shot GUI override or run mapping directly.
+Mapping is filtered by configured AD groups resolved through LDAP after a DC Locator check.
 ## [Map-PrintersCloudNative.Ps1](<Map-PrintersCloudNative.Ps1>)
 Maps Intune-managed cloud-native drives or printers by scheduled task, manual run, or remediation workflow.
 

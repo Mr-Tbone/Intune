@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        3.3.0
+.VERSION        3.5.0
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16bd
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -17,39 +17,35 @@
     3.1.1 2026-06-05 Fix Remove-AddRemovePrograms packed-GUID converter (was leaving HKCR\Installer\Products\<wrong-id> orphaned, causing Intune detection to keep finding the app after uninstall -> 0x87D1041D)
     3.2.0 2026-06-05 Minor update with new name on scripts
     3.3.0 2026-06-14 Minor update to not overload Domain Controllers
+    3.4.0 2026-06-15 Minor update with a function to remove legacy Mr T-Bone scripts to migrate to the new version
+    3.5.0 2026-06-16 Minor update to move redundant tasks to scriptblocks
 #>
 
 <#
 .SYNOPSIS
-    Maps Intune-managed cloud-native drives or printers by scheduled task, manual run, or remediation workflow.
+    Maps Intune-managed cloud-native drives or printers.
 
 .DESCRIPTION
-    This script deploys and runs a drive-mapping or printer-mapping solution for Entra ID joined / cloud-native Windows devices.
-    It supports Intune Win32 app install, Intune remediation, elevated manual install/repair, normal user manual execution, and uninstall.
+    Deploys and runs a drive or printer mapping solution for Entra ID joined / cloud-native Windows devices.
+    Supports Intune Win32 app install, Intune remediation, manual install/repair, normal user execution, and uninstall.
 
-    During install or remediation, the script stages itself into the application folder, registers a hidden scheduled task that runs in user context,
-    writes a launcher script, stores a version marker, and optionally registers the solution in Add/Remove Programs with icon, shortcuts,
-    uninstall support, and modify/reinstall support.
+    During install or remediation, the script stages itself, registers a hidden user-context scheduled task, writes a launcher,
+    stores a version marker, and can register Add/Remove Programs entries, shortcuts, uninstall, and modify support.
 
-    During user execution, the script can either trigger the deployed scheduled-task worker with a one-shot GUI override or run the mapping logic directly.
-    Mapping applicability is determined from configured AD group names collected through LDAP after a DC Locator check. If no domain controller is reachable,
-    the script aborts mapping instead of continuing with incomplete group data. Optional stale drive or printer cleanup is also supported.
+    During user execution, it can start the deployed worker with a one-shot GUI override or run mapping directly.
+    Mapping is filtered by configured AD groups resolved through LDAP after a DC Locator check.
 
 .EXAMPLE
     .\Map-DrivesCloudNative.ps1
-    Runs with default settings. As SYSTEM/Admin it installs or repairs the deployed worker and scheduled task; as a normal user it invokes the existing worker or runs the mapping logic for the current session.
+    Runs with default settings. As SYSTEM/Admin it installs or repairs the worker and scheduled task; as a normal user it starts the existing worker or runs mapping for the current session.
 
 .EXAMPLE
     .\Map-DrivesCloudNative.ps1 -LogVerboseEnabled $true -LogToDisk $true
-    Runs with verbose logging enabled and writes the collected log to disk at script end.
+    Runs with verbose logging enabled and writes the log to disk at script end.
 
 .EXAMPLE
     .\Map-DrivesCloudNative.ps1 -InstallType UnInstall
     Removes the scheduled task, staged worker files, version marker, and Add/Remove Programs registration.
-
-.EXAMPLE
-    .\Map-DrivesCloudNative.ps1 -RemoveStaleObjects $true
-    Maps only the configured resources for the current user and removes stale mapped drives or printers that are no longer defined.
 
 .NOTES
     Please feel free to use this, but make sure to credit @MrTbone_se as the original author
@@ -74,55 +70,41 @@ param(
     [Parameter(Mandatory = $false, HelpMessage = "Remove stale drive/printer mappings that are no longer in the configuration")]
     [Bool]$RemoveStaleObjects       = $true,
 
-    [Parameter(Mandatory = $false,          HelpMessage = 'Specify how to run the script: Install, Repair or UnInstall')]    
+    [Parameter(Mandatory = $false,          HelpMessage = 'Specify how to run the script: Install, Repair or UnInstall')]
     [validateset("Install", "Repair", "UnInstall")]
     [string]$InstallType            = "Install",
 
     [Parameter(Mandatory = $false, HelpMessage = "Force replace all scripts and scheduled tasks even if version is the same")]
     [Bool]$ForceReplaceAll          = $false,
 
-    # ==========> Add Application to Add Remove Program (Add-AddRemoveProgram) <===========================================
+    [Parameter(Mandatory = $false, HelpMessage = "Detect and remove legacy mapping deployments from earlier generations before installing or repairing the current deployment")]
+    [Bool]$ReplaceOldV1andV2        = $true,
 
+    # ==========> ScheduleTask Triggers (Add-NewScheduledTask) <===========================================================
+    [Parameter(Mandatory = $false, HelpMessage = "Run the script at user logon")]
+    [Bool]$RunAtLogon               = $true,
+
+    [Parameter(Mandatory = $false, HelpMessage = "Run the script when network connection is established")]
+    [Bool]$RunAtNetConnect          = $false,
+
+    # ==========> Add Application to Add Remove Program (Add-AddRemoveProgram) <===========================================
     [Parameter(Mandatory = $false,          HelpMessage = 'Name of the application/script being wrapped')]
     [String]$ARPAppName             = "Map Drives",
 
-    [Parameter(Mandatory = $false,          HelpMessage = 'GUID of the application/script being wrapped. NOTE: This needs to be unique for each wrapped app')]
-    [ValidatePattern('^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$')]
-    [String]$ARPAppGuid             = "{feedbeef-beef-4dad-beef-b628ccca16bd}",
-
-    [Parameter(Mandatory = $false,          HelpMessage = 'Version of the application. Increment when changing config')]
-    [ValidatePattern("^\d+\.\d+\.\d+$")]
-    [version]$ARPAppVersion         = $MappingVersion,
-
     [Parameter(Mandatory = $false,          HelpMessage = 'Company name used for naming of folders and registry keys')]
     [String]$ARPAppPublisher        = "T-Bone Consulting",
-    
-    [Parameter(Mandatory = $false,          HelpMessage = 'Optional Base64-encoded .ico content to use as the icon of the app. if not specified, a default icon will be used')]
-    [string]$ARPAppIcon             = "",
 
-    [Parameter(Mandatory = $false,          HelpMessage = "Application folder path, if not specified, it will use the native 64-bit %ProgramFiles%\ARPPublisher\ARPAppName (via %ProgramW6432% so a 32-bit host does not get redirected to 'Program Files (x86)'). Falls back to %ProgramFiles% on a 32-bit OS where ProgramW6432 is unset.")]
-    [string]$ARPAppFolder           = "$(if (${env:ProgramW6432}) { ${env:ProgramW6432} } else { $env:ProgramFiles })\$ARPAppPublisher\$ARPAppName",
-    
     [Parameter(Mandatory = $false,          HelpMessage = 'Enable an uninstall option in Add Remove Programs, require administrator privileges to uninstall')]
     [bool]$ARPAppEnableUninstall    = $True,
 
     [Parameter(Mandatory = $false,          HelpMessage = 'Enable a modify option in Add Remove Programs (typically for repair/reinstall), require administrator privileges to modify')]
     [bool]$ARPAppEnableModify       = $True,
 
-    [Parameter(Mandatory = $false,          HelpMessage = 'Optional path to an external .ps1 file to use as the installer script')]
-    [string]$ARPAppInstallScript    = "",
-
-    [Parameter(Mandatory = $false,          HelpMessage = 'Optional path to an external .ps1 file to use as the uninstaller script')]
-    [string]$ARPAppUnInstallScript  = "",
-
     [Parameter(Mandatory = $false,          HelpMessage = 'Optional path to an external .ico file to use as the icon of the app')]
     [string]$ARPAppIconPath         = "",
 
-    [Parameter(Mandatory = $false,          HelpMessage = 'If $true, copy every file in the script source folder into the app folder (excluding the wrapper itself, the install/uninstall scripts and the icon, which are deployed under standardized names).')]
-    [bool]$ARPAppIncludeFolder      = $false,
-
-    [Parameter(Mandatory = $false,          HelpMessage = 'Optional name of a companion file inside the app folder to launch (t-bone.exe). If blank, shortcuts default to launching the deployed wrapper script.')]
-    [string]$ARPAppUserStartFile    = "",
+    [Parameter(Mandatory = $false,          HelpMessage = 'Optional Base64-encoded .ico content to use as the icon of the app. if not specified, a default icon will be used')]
+    [string]$ARPAppIcon             = "",
 
     [Parameter(Mandatory = $false,          HelpMessage = 'Create an All-Users Desktop shortcut (targets ARPAppUserStartFile when set, otherwise the deployed wrapper script)')]
     [bool]$ARPAppShortcutOnDesktop  = $true,
@@ -130,29 +112,12 @@ param(
     [Parameter(Mandatory = $false,          HelpMessage = 'Create an All-Users Start Menu shortcut (targets ARPAppUserStartFile when set, otherwise the deployed wrapper script)')]
     [bool]$ARPAppShortcutInStart    = $true,
 
-    [Parameter(Mandatory = $false,          HelpMessage = 'Force the action to reregister the application, ignoring any prompts or checks')]
-    [bool]$ARPAppForce              = $false,
+    [Parameter(Mandatory = $false,          HelpMessage = 'GUID of the application/script being wrapped. NOTE: This needs to be unique for each wrapped app')]
+    [ValidatePattern('^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$')]
+    [String]$ARPAppGuid             = "{feedbeef-beef-4dad-beef-b628ccca16bd}",
 
-# ==========> Script Context Requirements (verified against execution context) <=======================================
-    [Parameter(Mandatory = $false,          HelpMessage = 'Required execution identity. Script aborts if not matched. Valid: System, LocalService, NetworkService, ServiceAccount, Admin, User')]
-    [ValidateSet('System','LocalService','NetworkService','ServiceAccount','Admin','User')]
-    [string[]]$CTXReqIdentity       = @(),
-
-    [Parameter(Mandatory = $false,          HelpMessage = 'Minimum required PowerShell version (e.g. 5.1). Script aborts if PSVersion is lower.')]
-    [version]$CTXReqPSVersion       = $null,
-
-    [Parameter(Mandatory = $false,          HelpMessage = 'Minimum required OS build number (e.g. 19041 for Windows 10 2004). Script aborts if OS build is lower.')]
-    [int]$CTXReqOSBuild             = 0,
-
-    [Parameter(Mandatory = $false,          HelpMessage = 'Required process architecture, exits if not matched. Default = "" No required architecture. Valid: "", "x64", "x86"')]
-    [ValidateSet('x64','x86','')]
-    [string]$CTXReqArchitecture     = "",
-
-    [Parameter(Mandatory = $false,          HelpMessage = 'If $true and CTXReqArchitecture=x64 but running x86, relaunch via SysNative (Intune-friendly self-elevation to x64). Default $true so a 32-bit host (some Intune Remediations / Win32App 32-bit toggles) is automatically promoted to 64-bit, ensuring %ProgramFiles% and the HKLM Uninstall hive are not WoW64-redirected.')]
-    [bool]$CTXAutoRelaunchToX64     = $true,
-
-    [Parameter(Mandatory = $false,          HelpMessage = 'If $true, script aborts when a reboot is pending (CBS, Windows Update, or PendingFileRenameOperations).')]
-    [bool]$CTXAbortIfPendingReboot  = $false,
+    [Parameter(Mandatory = $false,          HelpMessage = "Application folder path, if not specified, it will use the native 64-bit %ProgramFiles%\ARPPublisher\ARPAppName (via %ProgramW6432% so a 32-bit host does not get redirected to 'Program Files (x86)'). Falls back to %ProgramFiles% on a 32-bit OS where ProgramW6432 is unset.")]
+    [string]$ARPAppFolder           = "$(if (${env:ProgramW6432}) { ${env:ProgramW6432} } else { $env:ProgramFiles })\$ARPAppPublisher\$ARPAppName",
 
 # ==========> Logging (Invoke-TboneLog) <==============================================================================
     [Parameter(Mandatory = $false,          HelpMessage='Name of Log, to set name for Eventlog and Filelog')]
@@ -182,7 +147,7 @@ param(
 #endregion
 
 #region ---------------------------------------------------[Modifiable Parameters and defaults]------------------------------------
-#IMPORTANT! When adding new Drivers make sure to also increment Version in $MappingVersion above. 
+#IMPORTANT! When adding new Drivers make sure to also increment Version in $MappingVersion above.
 # Add Objects to Map here either Printers or Drives (Not Both) with the following syntax
 #Printers:  $MapObjects += @{PrinterName="PrinterName"  ;Default=$true      ;Path="\\printserver\printerName"   ;ADGroups="My Group"}
 #Drives:    $MapObjects += @{Letter="X"                 ;Persistent=$true   ;Path="\\fileserver\fileshare"      ;ADGroups="My Group"    ;Label="My drive"}
@@ -204,7 +169,7 @@ Set-StrictMode -Version Latest
 [bool]$script:OriginalWhatIfPreference                                                  = $WhatIfPreference
 
 # Set verbose- and whatif- preference based on parameter instead of hardcoded values
-if ($LogVerboseEnabled)     {$VerbosePreference = 'Continue'}                   # Set verbose logging based on the parameter $LogVerboseEnabled
+if ($LogVerboseEnabled)     {$VerbosePreference = 'Continue'}
 else                        {$VerbosePreference = 'SilentlyContinue'}
 #endregion
 
@@ -218,6 +183,22 @@ else {throw "Unknown MapObject type: First object must contain 'Letter' or 'Prin
 
 # Build the unique list of AD group names referenced in $MapObjects. Used to scope LDAP queries to only those groups
 [string[]]$RequiredGroups       = @($MapObjects | ForEach-Object { $_['ADGroups'] } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+
+# Static ARP wrapper options for this script usage pattern.
+[string]$ARPAppInstallScript   = ""
+[string]$ARPAppUnInstallScript = ""
+[bool]$ARPAppIncludeFolder     = $false
+[string]$ARPAppUserStartFile   = ""
+[bool]$ARPAppForce             = $false
+[version]$ARPAppVersion        = $MappingVersion
+
+# Static script context requirements for this script usage pattern.
+[string[]]$CTXReqIdentity      = @()
+[version]$CTXReqPSVersion      = $null
+[int]$CTXReqOSBuild            = 0
+[string]$CTXReqArchitecture    = ""
+[bool]$CTXAutoRelaunchToX64    = $true
+[bool]$CTXAbortIfPendingReboot = $false
 
 # Set Names and Paths based on ObjectType for scripts and scheduled task
 [string]$UsersGroupSid          = "S-1-5-32-545"    # Built-in Users group, used for scheduled task
@@ -254,7 +235,6 @@ if ([string]::IsNullOrWhiteSpace($LogName)) { $LogName = $TaskName }
 #endregion
 
 #region ---------------------------------------------------[Import Modules and Extensions]-----------------------------------------
-# No modules to import for this script, it may use assembly loading inside functions later if needed.
 #endregion
 
 #region ---------------------------------------------------[Functions]------------------------------------------------------------
@@ -324,27 +304,21 @@ function Invoke-TboneLog {
         function Script:Write-Error{$m="$args";$c=(Get-PSCallStack)[1];$r="Row$($c.ScriptLineNumber)";$e="$(_Time),ERROR,$r,$(_ID),$m";$global:_l.Add($e);if($global:_g){if($global:_az){Microsoft.PowerShell.Utility\Write-Error $m}else{Microsoft.PowerShell.Utility\Write-Host $e -ForegroundColor Red}};if($ErrorActionPreference -eq 'Stop'){_Save;_Clean;exit}}
     }
 }
-Function Get-ExecutionContext {
+Function Get-RuntimeContext {
 <#
 .SYNOPSIS
     Detects how the script is being executed and (optionally) validates it against requirements; can auto-relaunch in 64-bit.
 .DESCRIPTION
     Inspects environment variables, the script path, parent/ancestor processes, identity, and architecture and returns a PSCustomObject with the following properties:
-    - CTXMode           : WinPE, AzureAutomation, AzureFunction, GitHubActions, GitLabCI, AzureDevOps, TaskSequence,
-                              Remediation, Detection, PlatformScript, Intunewin, SCCM, GPO, or Standalone
-    - CTXPath           : ProgramFiles, ProgramFilesX86, IMEContent, ProgramData, AppDataRoaming, AppDataLocal,
-                              IMECache, CCMCache, SystemRoot, or Other
-    - CTXSource         : Managed (set for any non-Standalone CTXMode), or one of
-                              Manual, ScheduledTask, RemoteSession, VSCodeDebug, ISE, Explorer, Batch, Interactive
+    - CTXMode           : WinPE, AzureAutomation, AzureFunction, GitHubActions, GitLabCI, AzureDevOps, TaskSequence, Remediation, Detection, PlatformScript, Intunewin, SCCM, GPO, or Standalone
+    - CTXPath           : ProgramFiles, ProgramFilesX86, IMEContent, ProgramData, AppDataRoaming, AppDataLocal, IMECache, CCMCache, SystemRoot, or Other
+    - CTXSource         : Managed (set for any non-Standalone CTXMode), or one of Manual, ScheduledTask, RemoteSession, VSCodeDebug, ISE, Explorer, Batch, Interactive
     - CTXIdentity       : System, LocalService, NetworkService, ServiceAccount, Admin, or User
     - CTXArchitecture   : x64 or x86
     - CTXPSVersion      : Version object from $PSVersionTable.PSVersion (e.g. 5.1.19041.0)
     - CTXOSBuild        : Integer Windows OS build number (0 on non-Windows)
     - CTXPendingReboot  : Boolean; $true when a reboot is pending (CBS / Windows Update / PendingFileRenameOperations)
     - CTXNoGUISupport   : Boolean; $true when a GUI (WinForms) cannot be shown - non-Windows or non-interactive session
-
-    When any of -CTXReqIdentity / -CTXReqArchitecture / -CTXReqMode / -CTXReqPSVersion / -CTXReqOSBuild / -CTXAbortIfPendingReboot is provided, the detected context is validated:
-    On success the context object is returned, on failure $null is returned (and an error is written).
 .NOTES
     Version: 1.1.0
     
@@ -382,7 +356,7 @@ Function Get-ExecutionContext {
         [Parameter(HelpMessage = 'Caller bound parameters to forward on relaunch (pass $PSBoundParameters from the caller).')]
         [hashtable]$CTXForwardParameters    = @{}
     )
-    Write-Verbose "Start function Get-ExecutionContext"
+    Write-Verbose "Start function Get-RuntimeContext"
     # Initialize variables
     [string]$CTXMode    = 'Standalone'
     [string]$CTXPath    = 'Other'
@@ -751,18 +725,13 @@ Function Add-AddRemovePrograms {
         $ExecutingScriptName = Split-Path $PSCommandPath -Leaf
         Write-Verbose "Executing script is enumerated as: $ExecutingScriptPath ($ExecutingScriptName)"
 
-        # Convert GUID to MSI Packed GUID (ProductID)
-        # MSI reverses each segment: segments 1-3 are fully reversed, segments 4-5 are pair-swapped
+        # Convert GUID to MSI Packed GUID (ProductID) - MSI reverses each segment: segments 1-3 are fully reversed, segments 4-5 are pair-swapped
         # Example: {FEEDBEEF-BEEF-4DAD-BEEF-B628CCCA16E0} -> FEEBDEEFFEEBDAD4EBFE6B82CCAC610E
         [string]$private:stripped = $ARPAppGuid -replace '[{}\-]', ''
         [string]$ARPFuncProductID = (
-            # Segment 1 (8 chars): reverse
-            ($stripped[7..0] -join '') +
-            # Segment 2 (4 chars): reverse
-            ($stripped[11..8] -join '') +
-            # Segment 3 (4 chars): reverse
-            ($stripped[15..12] -join '') +
-            # Segments 4+5 (16 chars): swap each pair
+            ($stripped[7..0]   -join '') +  # Segment 1 (8 chars): reverse
+            ($stripped[11..8]  -join '') +  # Segment 2 (4 chars): reverse
+            ($stripped[15..12] -join '') +  # Segment 3 (4 chars): reverse
             (($stripped[16..31] | ForEach-Object -Begin { $private:pair = @() } -Process {
                 $pair += $_
                 if ($pair.Count -eq 2) { $pair[1]; $pair[0]; $pair = @() }
@@ -784,7 +753,6 @@ Function Add-AddRemovePrograms {
         [string]$ARPFuncProductsRegKey  = "HKCR:\Installer\Products\$ARPFuncProductID"
 
         # Version gate: skip install when an equal-or-newer version is already registered (unless -ARPAppForce $true).
-        # Emits $true if the caller should proceed with the installer payload, $false to skip.
         if (-not $ARPAppForce) {
             [version]$private:CurrentVersion = '0.0.0.0'
             try {
@@ -1008,8 +976,7 @@ Function Add-AddRemovePrograms {
             }
         }
 
-        # Create All-Users desktop/start shortcuts. If ARPAppUserStartFile is set and exists in ARPAppFolder it is used;
-        # otherwise shortcuts launch the deployed wrapper script.
+        # Create All-Users desktop/start shortcuts. If ARPAppUserStartFile is set and exists in ARPAppFolder it is used, otherwise shortcuts launch the deployed wrapper script.
         if ($ARPAppShortcutOnDesktop -or $ARPAppShortcutInStart) {
             [string]$private:ShortcutTargetPath = $null
             [string]$private:ShortcutArguments  = ''
@@ -1312,8 +1279,7 @@ Function Remove-AddRemovePrograms {
         $private:HKCRDrive = $false
     }
     Process {
-        # Convert GUID to MSI Packed GUID (ProductID) - MUST match the converter used in Add-AddRemovePrograms.
-        # MSI reverses each segment: segments 1-3 are fully reversed, segments 4-5 are pair-swapped.
+        # Convert GUID to MSI Packed GUID (ProductID) - MSI reverses each segment: segments 1-3 are fully reversed, segments 4-5 are pair-swapped
         # Example: {FEEDBEEF-BEEF-4DAD-BEEF-B628CCCA16E0} -> FEEBDEEFFEEBDAD4EBFE6B82CCAC610E
         [string]$private:stripped = $ARPAppGuid -replace '[{}\-]', ''
         [string]$ARPFuncProductID = (
@@ -1471,7 +1437,7 @@ function Test-MapObjectValidation {
 .NOTES
     Author:  @MrTbone_se (T-bone Granheden)
     Version: 1.0
-    
+
     Version History:
     1.0 - Initial version
 #>
@@ -1479,31 +1445,38 @@ function Test-MapObjectValidation {
     param ([Parameter(Mandatory)][array]$MapObjects)
 
     # Regex patterns for validation
-    $NameRegex      = '[<>:"/\\|?*]'
-    $PathRegex      = '^\\\\[\w.\-]+\\[\w.\-$]+(?:\\[\w.\-$ ]+)*$'
-    $LetterRegex    = '^[A-Za-z]$'
-    
+    $NameRegex   = '[<>:"/\\|?*]'
+    $PathRegex   = '^\\\\[\w.\-]+\\[\w.\-$]+(?:\\[\w.\-$ ]+)*$'
+    $LetterRegex = '^[A-Za-z]$'
+
     $i = 0
     foreach ($o in $MapObjects) {
         $i++; $e = @()
-        $p = $o['Path']
-        $validPath = $p -and $p -match $PathRegex
-        
+
         if ($o.ContainsKey('Letter')) {
-            if ($o['Letter'] -is [string]) { $o['Letter'] = $o['Letter'].TrimEnd(':') }
-            if ($o['Letter'] -notmatch $LetterRegex)            { $e += "Invalid Letter '$($o['Letter'])'" }
-            if ($o['Persistent'] -isnot [bool])                 { $e += "Persistent must be `$true or `$false" }
-            if (-not $validPath)                                { $e += "Invalid/Missing Path '$p'" }
-            if ($o['Label'] -and $o['Label'] -match $NameRegex) { $e += "Label contains illegal characters" }
+            $letter = $o['Letter']
+            if ($letter -is [string]) { $letter = $letter.TrimEnd(':') }
+            if ($letter -notmatch $LetterRegex)                                          { $e += "Invalid Letter '$($o['Letter'])'" }
+            if (-not $o.ContainsKey('Persistent') -or $o['Persistent'] -isnot [bool])    { $e += "Persistent must be `$true or `$false" }
+            $p = $o['Path']
+            if (-not ($p -and $p -match $PathRegex))                                     { $e += "Invalid/Missing Path '$p'" }
+            if ($o['Label'] -and $o['Label'] -match $NameRegex)                          { $e += "Label contains illegal characters" }
         }
         elseif ($o.ContainsKey('PrinterName')) {
-            if ([string]::IsNullOrWhiteSpace($o['PrinterName'])) { $e += "Missing/Empty PrinterName" }
-            elseif ($o['PrinterName'] -match $NameRegex)         { $e += "PrinterName contains illegal characters" }
-            if ($o['Default'] -isnot [bool])                     { $e += "Default must be `$true or `$false" }
-            if (-not $validPath)                                 { $e += "Invalid/Missing Path '$p'" }
+            if ([string]::IsNullOrWhiteSpace($o['PrinterName']))                         { $e += "Missing/Empty PrinterName" }
+            elseif ($o['PrinterName'] -match $NameRegex)                                 { $e += "PrinterName contains illegal characters" }
+            if (-not $o.ContainsKey('Default') -or $o['Default'] -isnot [bool])          { $e += "Default must be `$true or `$false" }
+            $p = $o['Path']
+            if (-not ($p -and $p -match $PathRegex))                                     { $e += "Invalid/Missing Path '$p'" }
         }
         else { $e += "Unknown Type: Must have 'Letter' or 'PrinterName'" }
-        if ($o['ADGroups'] -and $o['ADGroups'] -match $NameRegex) { $e += "ADGroups contains illegal characters" }
+
+        if ($o['ADGroups']) {
+            foreach ($g in @($o['ADGroups'])) {
+                if ($g -match $NameRegex) { $e += "ADGroups contains illegal characters: '$g'"; break }
+            }
+        }
+
         if ($e.Count -gt 0) { throw "MapObject[$i] validation failed: $($e -join ', ')" }
     }
     return $MapObjects
@@ -1516,7 +1489,8 @@ function Get-ADGroupMemberships {
     Determines which configured AD groups the current user belongs to.
     Prefers the local Kerberos token to minimize DC load and avoid unnecessary LDAP queries.
     Falls back to a single scoped LDAP query only when on-prem group SIDs are not available.
-    Returns the matched required group names, resolving the primary group only when needed..NOTES
+    Returns the matched required group names, resolving the primary group only when needed.
+.NOTES
     Author:  @MrTbone_se (T-bone Granheden)
     Version: 3.0
 
@@ -1994,7 +1968,8 @@ function New-DriveMapping {
     }
     end {}
 }
-function New-ScheduledTask {
+
+function Register-IntuneTask {
 <#
 .SYNOPSIS
     Creates (or replaces) a Windows scheduled task in a universal, reusable way.
@@ -2004,49 +1979,16 @@ function New-ScheduledTask {
     principal (user SID, group SID or built-in account) and common settings.
     Designed to be dropped into any script - all parameters are suffixed with TASK
     to avoid collisions with surrounding script variables.
-.PARAMETER TaskName
-    Name of the scheduled task to create.
-.PARAMETER TaskDescription
-    Description shown in Task Scheduler.
-.PARAMETER TaskExecute
-    Full path to the executable that the task should run.
-.PARAMETER TaskArgument
-    Arguments passed to the executable.
-.PARAMETER TaskWorkingDirectory
-    Optional working directory for the action.
-.PARAMETER TaskPrincipalGroupSid
-    SID of a group the task runs as (e.g. S-1-5-32-545 for BUILTIN\Users).
-.PARAMETER TaskPrincipalUserId
-    User account or SID the task runs as. Ignored if TaskPrincipalGroupSid is set.
-.PARAMETER TaskRunLevel
-    Run level: Limited (default) or Highest.
-.PARAMETER TaskLogonType
-    Logon type when running as a user (default ServiceAccount-style: Interactive).
-.PARAMETER TaskTriggerAtLogon
-    Adds an "At log on" trigger.
-.PARAMETER TaskTriggerAtStartup
-    Adds an "At system startup" trigger.
-.PARAMETER TaskTriggerEventSubscription
-    One or more event-log XML subscription strings. Each creates an event trigger.
-.PARAMETER TaskSettings
-    Optional pre-built CIM settings object. If omitted, sensible defaults are used.
-.PARAMETER TaskStartImmediately
-    Start the task once after registration.
-.PARAMETER TaskForce
-    Overwrite the task if it already exists (default behavior of Register-ScheduledTask -Force).
-.EXAMPLE
-    New-ScheduledTask -TaskName 'MapPrinters' -TaskDescription 'Map printers at logon' `
-        -TaskExecute "$env:SystemRoot\System32\wscript.exe" `
-        -TaskArgument '"C:\ProgramData\Intune\map.vbs" "C:\ProgramData\Intune\map.ps1"' `
-        -TaskPrincipalGroupSid 'S-1-5-32-545' `
-        -TaskTriggerAtLogon -TaskStartImmediately
+    Renamed from New-ScheduledTask to avoid collision with the built-in cmdlet of
+    the same name in the ScheduledTasks module (which has no -TaskName parameter).
 .NOTES
     Author:  @MrTbone_se (T-bone Granheden)
-    Version: 1.1
-
+    Version: 1.2
     Version History:
     1.0 - Initial stub
     1.1 - Universal implementation
+    1.2 - Renamed from New-ScheduledTask to Register-IntuneTask to avoid collision
+          with the built-in ScheduledTasks\New-ScheduledTask cmdlet.
 #>
     [CmdletBinding()]
     param(
@@ -2085,6 +2027,9 @@ function New-ScheduledTask {
         [Parameter(Mandatory = $false, HelpMessage = "Add an AtStartup trigger to the scheduled task")]
         [switch]$TaskTriggerAtStartup,
 
+        [Parameter(Mandatory = $false, HelpMessage = "Add an event trigger that fires when a network profile becomes connected (NetworkProfile/Operational EventID 10000)")]
+        [switch]$TaskTriggerAtNetConnect,
+
         [Parameter(Mandatory = $false, HelpMessage = "One or more XML event subscriptions used to create event triggers")]
         [string[]]$TaskTriggerEventSubscription,
 
@@ -2106,9 +2051,14 @@ function New-ScheduledTask {
         $TaskTriggers = @()
         if ($TaskTriggerAtLogon)   { $TaskTriggers += New-ScheduledTaskTrigger -AtLogOn }
         if ($TaskTriggerAtStartup) { $TaskTriggers += New-ScheduledTaskTrigger -AtStartup }
-        if ($TaskTriggerEventSubscription) {
+        $TaskEventSubscriptions = @()
+        if ($TaskTriggerEventSubscription) { $TaskEventSubscriptions += $TaskTriggerEventSubscription }
+        if ($TaskTriggerAtNetConnect) {
+            $TaskEventSubscriptions += "<QueryList><Query Id='0' Path='Microsoft-Windows-NetworkProfile/Operational'><Select Path='Microsoft-Windows-NetworkProfile/Operational'>*[System[Provider[@Name='Microsoft-Windows-NetworkProfile'] and EventID=10000]]</Select></Query></QueryList>"
+        }
+        if ($TaskEventSubscriptions.Count -gt 0) {
             $TaskEventClass = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace root/Microsoft/Windows/TaskScheduler
-            foreach ($TaskSub in $TaskTriggerEventSubscription) {
+            foreach ($TaskSub in $TaskEventSubscriptions) {
                 $TaskEventTrigger = $TaskEventClass | New-CimInstance -ClientOnly
                 $TaskEventTrigger.Enabled = $true
                 $TaskEventTrigger.Subscription = $TaskSub
@@ -2116,7 +2066,7 @@ function New-ScheduledTask {
             }
         }
         if (-not $TaskTriggers -or $TaskTriggers.Count -eq 0) {
-            throw "At least one trigger must be specified (TaskTriggerAtLogon, TaskTriggerAtStartup or TaskTriggerEventSubscription)."
+            throw "At least one trigger must be specified (TaskTriggerAtLogon, TaskTriggerAtStartup, TaskTriggerAtNetConnect or TaskTriggerEventSubscription)."
         }
 
         # Build principal
@@ -2192,45 +2142,323 @@ function New-ScheduledTask {
     }
 }
 
+function Remove-LegacyV1V2Artifacts {
+<#
+.SYNOPSIS
+    Removes legacy mapping deployment artifacts (V1/V2) for the same object type as the current deployment.
+.DESCRIPTION
+    Enumerates all legacy Mr T-bone mapping scripts by checking for wscript(.exe)+.vbs mapping tasks
+    Removes only files, tasks and app registration for object type matches the current deployment
+.NOTES
+    Author:  @MrTbone_se (T-bone Granheden)
+    Version: 1.1
+
+    Version History:
+    1.0 - Initial version
+    1.1 - Tighter wscript boundary, stricter CorpData fallback, single-shot regex match,
+          pre-compiled patterns, gated logs-folder tracking, pre-computed sort key
+#>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $true, HelpMessage = "Object type the current deployment manages ('Drive' or 'Printer'); only legacies of this type are removed")]
+        [ValidateSet('Drive', 'Printer')]
+        [string]$ObjectType
+    )
+    begin {
+        # Markers used to confirm that a discovered .ps1 belongs to one of our legacy mapping scripts.
+        $LegacyContentMarker  = 'IntuneDriveMapping|IntunePrinterMapping|MapDrivesCloudNative|MapPrintersCloudNative|Map-DrivesCloudNative|Map-PrintersCloudNative|CorpDataPath'
+        # Markers used to classify a confirmed legacy .ps1 as Drive vs Printer (mapping-table signature first, then function calls).
+        $DriveTableMarker     = '@\{\s*Letter\b'
+        $PrinterTableMarker   = '@\{\s*PrinterName\b'
+        $DriveCallMarker      = 'New-PSDrive\b|New-DriveMapping\b|New-SmbMapping\b'
+        $PrinterCallMarker    = 'Add-Printer\b|New-PrinterMapping\b'
+        # Pattern used to extract hardcoded MSI/Win32 ARP GUIDs from confirmed legacy .ps1 content.
+        $LegacyGuidPattern    = '\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}'
+        # Filename heuristic for the CorpData\scripts fallback when a sibling .ps1 is missing.
+        $LegacyNameHeuristic  = 'Map.*Drive|Map.*Printer|Mapping'
+        # Pre-compiled regex patterns for first .vbs token extraction from task arguments.
+        $VbsQuotedPattern     = [regex]::new('"([^"]+\.vbs)"',                 [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        $VbsUnquotedPattern   = [regex]::new('(?:^|\s)([^\s"]+\.vbs)(?:\s|$)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        # State counters and case-insensitive sets accumulated during removal.
+        $RemovedTasks   = 0
+        $RemovedFiles   = 0
+        $RemovedArp     = 0
+        $LegacyFolders  = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $LegacyArpGuids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    }
+    process {
+        # =================== PHASE 1: ENUMERATE ===================
+        # Build a list of legacy candidates (one per scheduled task whose action is wscript+vbs).
+        $LegacyCandidates = [System.Collections.Generic.List[object]]::new()
+
+        $LegacyTasks = @()
+        try {
+            $LegacyTasks = @(Get-ScheduledTask -ErrorAction Stop | Where-Object {
+                $hit = $false
+                foreach ($action in $_.Actions) {
+                    # Skip non-Exec actions (COM handler, email, message box) - they have no Execute/Arguments and would throw under StrictMode.
+                    if ($action.CimClass.CimClassName -ne 'MSFT_TaskExecAction') { continue }
+                    if (($action.Execute -match '(?:^|\\)wscript(?:\.exe)?$') -and ($action.Arguments -match '\.vbs(?:"|\s|$)')) {
+                        $hit = $true; break
+                    }
+                }
+                $hit
+            })
+        }
+        catch { Write-Warning "Failed to enumerate scheduled tasks during legacy cleanup. Error: $_" }
+
+        foreach ($legacyTask in $LegacyTasks) {
+            # Pull the first quoted .vbs path from the task arguments, or fall back to an unquoted token.
+            # Restrict to MSFT_TaskExecAction so StrictMode doesn't trip on actions without an Arguments property.
+            $taskArguments = ($legacyTask.Actions | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskExecAction' } | ForEach-Object { [string]$_.Arguments }) -join ' '
+            $legacyVbsPath = $null
+            $vbsMatch = $VbsQuotedPattern.Match($taskArguments)
+            if ($vbsMatch.Success) { $legacyVbsPath = $vbsMatch.Groups[1].Value }
+            else {
+                $vbsMatch = $VbsUnquotedPattern.Match($taskArguments)
+                if ($vbsMatch.Success) { $legacyVbsPath = $vbsMatch.Groups[1].Value }
+            }
+            if ([string]::IsNullOrWhiteSpace($legacyVbsPath)) { continue }
+
+            $legacyVbsDir  = Split-Path -Path $legacyVbsPath -Parent
+            $legacyVbsBase = [System.IO.Path]::GetFileNameWithoutExtension($legacyVbsPath)
+            if ([string]::IsNullOrWhiteSpace($legacyVbsDir) -or [string]::IsNullOrWhiteSpace($legacyVbsBase)) { continue }
+
+            # Derive matching .ps1 from the same folder. Prefer same basename, fall back to any *Mapping.ps1 sibling.
+            $legacyPs1Path = Join-Path -Path $legacyVbsDir -ChildPath "$legacyVbsBase.ps1"
+            if (-not (Test-Path -LiteralPath $legacyPs1Path -PathType Leaf)) {
+                $alternatePs1 = @(Get-ChildItem -LiteralPath $legacyVbsDir -Filter '*Mapping.ps1' -File -Force -ErrorAction SilentlyContinue)
+                if ($alternatePs1.Count -gt 0) { $legacyPs1Path = $alternatePs1[0].FullName }
+            }
+
+            # Confirm via known markers and capture content for type classification and GUID extraction.
+            $legacyConfirmed  = $false
+            $legacyPs1Content = $null
+            if (Test-Path -LiteralPath $legacyPs1Path -PathType Leaf) {
+                try {
+                    $legacyPs1Content = Get-Content -LiteralPath $legacyPs1Path -Raw -ErrorAction Stop
+                    if ($legacyPs1Content -match $LegacyContentMarker) { $legacyConfirmed = $true }
+                }
+                catch { Write-Warning "Failed to read '$legacyPs1Path' for legacy verification. Error: $_" }
+            }
+            elseif (($legacyVbsDir -match '\\CorpData\\scripts\\?$') -and ($legacyVbsBase -match $LegacyNameHeuristic)) {
+                $legacyConfirmed = $true
+            }
+            if (-not $legacyConfirmed) {
+                Write-Verbose "Skipping task '$($legacyTask.TaskName)' - .vbs found but does not match a legacy mapping signature"
+                continue
+            }
+
+            # Classify object type: task name -> .ps1 filename -> .vbs filename -> .ps1 content (mapping table, then function calls).
+            $legacyType  = $null
+            $taskNameTxt = [string]$legacyTask.TaskName
+            $ps1NameTxt  = if ($legacyPs1Path) { [System.IO.Path]::GetFileNameWithoutExtension($legacyPs1Path) } else { '' }
+            if     ($taskNameTxt   -match 'Printer') { $legacyType = 'Printer' }
+            elseif ($taskNameTxt   -match 'Drive')   { $legacyType = 'Drive' }
+            elseif ($ps1NameTxt    -match 'Printer') { $legacyType = 'Printer' }
+            elseif ($ps1NameTxt    -match 'Drive')   { $legacyType = 'Drive' }
+            elseif ($legacyVbsBase -match 'Printer') { $legacyType = 'Printer' }
+            elseif ($legacyVbsBase -match 'Drive')   { $legacyType = 'Drive' }
+            elseif ($legacyPs1Content) {
+                if     ($legacyPs1Content -match $DriveTableMarker)   { $legacyType = 'Drive' }
+                elseif ($legacyPs1Content -match $PrinterTableMarker) { $legacyType = 'Printer' }
+                elseif ($legacyPs1Content -match $DriveCallMarker)    { $legacyType = 'Drive' }
+                elseif ($legacyPs1Content -match $PrinterCallMarker)  { $legacyType = 'Printer' }
+            }
+            if (-not $legacyType) {
+                Write-Verbose "Skipping task '$($legacyTask.TaskName)' - unable to classify as Drive or Printer"
+                continue
+            }
+
+            # Extract hardcoded ARP GUIDs from the .ps1 content (if any).
+            $taskArpGuids = [System.Collections.Generic.List[string]]::new()
+            if ($legacyPs1Content) {
+                foreach ($guidMatch in [regex]::Matches($legacyPs1Content, $LegacyGuidPattern)) {
+                    [void]$taskArpGuids.Add($guidMatch.Value)
+                }
+            }
+
+            [void]$LegacyCandidates.Add([pscustomobject]@{
+                TaskName   = $legacyTask.TaskName
+                TaskPath   = $legacyTask.TaskPath
+                VbsPath    = $legacyVbsPath
+                Ps1Path    = $legacyPs1Path
+                VbsDir     = $legacyVbsDir
+                VbsBase    = $legacyVbsBase
+                LegacyType = $legacyType
+                ArpGuids   = $taskArpGuids
+            })
+        }
+
+        # Filter to only candidates whose object type matches the current deployment.
+        $MatchedCandidates = @($LegacyCandidates | Where-Object { $_.LegacyType -eq $ObjectType })
+        $UnmatchedCount    = $LegacyCandidates.Count - $MatchedCandidates.Count
+        if ($UnmatchedCount -gt 0) { Write-Verbose "Leaving $UnmatchedCount legacy task(s) intact - they map a different object type than the current deployment ('$ObjectType')" }
+        if ($MatchedCandidates.Count -eq 0) {
+            Write-Verbose "No legacy '$ObjectType' artifacts detected"
+            return
+        }
+        Write-Verbose "Discovered $($MatchedCandidates.Count) legacy '$ObjectType' candidate(s) for removal"
+
+        # =================== PHASE 2: REMOVE TASKS + FILES ===================
+        foreach ($candidate in $MatchedCandidates) {
+            # Unregister the legacy scheduled task.
+            if ($PSCmdlet.ShouldProcess($candidate.TaskName, 'Remove legacy scheduled task')) {
+                try {
+                    Unregister-ScheduledTask -TaskName $candidate.TaskName -TaskPath $candidate.TaskPath -Confirm:$false -ErrorAction Stop
+                    $RemovedTasks++
+                    Write-Verbose "Removed legacy scheduled task '$($candidate.TaskName)' [$($candidate.LegacyType)]"
+                }
+                catch { Write-Warning "Failed to remove legacy scheduled task '$($candidate.TaskName)'. Error: $_" }
+            }
+
+            # Collect ARP GUIDs across all matched candidates for the next phase.
+            foreach ($guid in $candidate.ArpGuids) { [void]$LegacyArpGuids.Add($guid) }
+
+            # Remove staged files: .vbs, derived .ps1, optional .version next to it.
+            $stagedFiles = @(
+                $candidate.VbsPath,
+                $candidate.Ps1Path,
+                (Join-Path -Path $candidate.VbsDir -ChildPath "$($candidate.VbsBase).version")
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+            foreach ($stagedFile in $stagedFiles) {
+                if (-not (Test-Path -LiteralPath $stagedFile -PathType Leaf)) { continue }
+                if ($PSCmdlet.ShouldProcess($stagedFile, 'Remove legacy file')) {
+                    try {
+                        Remove-Item -LiteralPath $stagedFile -Force -ErrorAction Stop
+                        $RemovedFiles++
+                        Write-Verbose "Removed legacy file: $stagedFile"
+                    }
+                    catch { Write-Warning "Failed to remove legacy file '$stagedFile'. Error: $_" }
+                }
+            }
+
+            # Track folders for empty-folder cleanup, and remove sibling logs that match the legacy basename.
+            [void]$LegacyFolders.Add($candidate.VbsDir)
+            $candidateParent = Split-Path -Path $candidate.VbsDir -Parent
+            if (-not [string]::IsNullOrWhiteSpace($candidateParent)) {
+                [void]$LegacyFolders.Add($candidateParent)
+                $candidateLogsDir = Join-Path -Path $candidateParent -ChildPath 'logs'
+                if (Test-Path -LiteralPath $candidateLogsDir -PathType Container) {
+                    try {
+                        $legacyLogFiles = @(Get-ChildItem -LiteralPath $candidateLogsDir -Filter "$($candidate.VbsBase)*.log" -File -Force -ErrorAction Stop)
+                        foreach ($legacyLogFile in $legacyLogFiles) {
+                            if ($PSCmdlet.ShouldProcess($legacyLogFile.FullName, 'Remove legacy log file')) {
+                                try {
+                                    Remove-Item -LiteralPath $legacyLogFile.FullName -Force -ErrorAction Stop
+                                    $RemovedFiles++
+                                    Write-Verbose "Removed legacy log file: $($legacyLogFile.FullName)"
+                                }
+                                catch { Write-Warning "Failed to remove legacy log file '$($legacyLogFile.FullName)'. Error: $_" }
+                            }
+                        }
+                    }
+                    catch { Write-Warning "Failed to enumerate legacy log files in '$candidateLogsDir'. Error: $_" }
+                    [void]$LegacyFolders.Add($candidateLogsDir)
+                }
+            }
+        }
+
+        # =================== PHASE 3: REMOVE ARP INSTALLS ===================
+        # For each unique GUID extracted, remove from HKLM Uninstall (and the WOW6432Node mirror)
+        foreach ($legacyArpGuid in $LegacyArpGuids) {
+            $uninstallRoots = @(
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$legacyArpGuid",
+                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$legacyArpGuid"
+            )
+            $legacyArpProps = $null
+            foreach ($uninstallPath in $uninstallRoots) {
+                if (Test-Path -LiteralPath $uninstallPath) {
+                    $legacyArpProps = Get-ItemProperty -LiteralPath $uninstallPath -ErrorAction SilentlyContinue
+                    if ($legacyArpProps) { break }
+                }
+            }
+            if (-not $legacyArpProps) {
+                Write-Verbose "Legacy ARP GUID '$legacyArpGuid' not present under HKLM Uninstall - skipping"
+                continue
+            }
+
+            $legacyInstallLocation = [string]$legacyArpProps.InstallLocation
+            $legacyDisplayName     = [string]$legacyArpProps.DisplayName
+            if ([string]::IsNullOrWhiteSpace($legacyDisplayName)) {
+                if (-not [string]::IsNullOrWhiteSpace($legacyInstallLocation)) { $legacyDisplayName = Split-Path -Path $legacyInstallLocation -Leaf }
+                else                                                           { $legacyDisplayName = $legacyArpGuid }
+            }
+            $legacyPublisher = [string]$legacyArpProps.Publisher
+
+            if ($PSCmdlet.ShouldProcess($legacyArpGuid, "Remove legacy ARP install '$legacyDisplayName'")) {
+                try {
+                    $null = Remove-AddRemovePrograms -ARPAppName $legacyDisplayName -ARPAppGuid $legacyArpGuid -ARPAppFolder $legacyInstallLocation -ARPAppPublisher $legacyPublisher
+                    $RemovedArp++
+                    Write-Verbose "Removed legacy ARP install '$legacyDisplayName' (GUID $legacyArpGuid)"
+                }
+                catch { Write-Warning "Failed to remove legacy ARP install '$legacyArpGuid'. Error: $_" }
+            }
+        }
+
+        # =================== PHASE 4: REMOVE EMPTY FOLDERS ===================
+        # Pre-compute path depth so Sort-Object doesn't reinvoke a script block per comparison.
+        $sortedLegacyFolders = $LegacyFolders |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { [pscustomobject]@{ Path = $_; Depth = ($_ -split '\\').Count } } |
+            Sort-Object -Property Depth -Descending |
+            ForEach-Object { $_.Path }
+        foreach ($legacyFolder in $sortedLegacyFolders) {
+            if (-not (Test-Path -LiteralPath $legacyFolder -PathType Container)) { continue }
+            try {
+                $folderEntries = @(Get-ChildItem -LiteralPath $legacyFolder -Force -ErrorAction Stop)
+                if ($folderEntries.Count -ne 0) { continue }
+                if ($PSCmdlet.ShouldProcess($legacyFolder, 'Remove empty legacy folder')) {
+                    Remove-Item -LiteralPath $legacyFolder -Force -ErrorAction Stop
+                    Write-Verbose "Removed empty legacy folder: $legacyFolder"
+                }
+            }
+            catch { Write-Warning "Failed to evaluate or remove legacy folder '$legacyFolder'. Error: $_" }
+        }
+    }
+    end {
+        if ($RemovedTasks -eq 0 -and $RemovedFiles -eq 0 -and $RemovedArp -eq 0) { Write-Verbose "No legacy '$ObjectType' mapping artifacts detected" }
+        else { Write-Verbose "Legacy '$ObjectType' cleanup summary: tasks=$RemovedTasks files=$RemovedFiles arp=$RemovedArp" }
+    }
+}
+
 function Show-ProgressGUI {
-    <#
-    .SYNOPSIS
-        Displays a dark-themed GUI progress window that executes a list of steps.
+<#
+.SYNOPSIS
+    Displays a dark-themed GUI window that executes a list of steps and reports per-step status.
+.DESCRIPTION
+    Each step has a Name and an Action (scriptblock). The form shows one row per step inside a scrolling
+    panel. Rows are colored grey (pending), yellow (running), green (success), orange (warning), and
+    red (error). When all steps succeed the window auto-closes after a short delay; on warning or error
+    the heading is updated and an OK button is shown so the user can review messages before closing.
+    Warning and error text is harvested both from the warning/error streams produced by the action and
+    from new entries written to the global $_l log buffer during the step.
+    The PowerShell console window is hidden on Windows for the duration of the dialog. On non-Windows
+    PowerShell 7 hosts (or when WinForms cannot be loaded) the function falls back to silent execution.
+.EXAMPLE
+    $steps = @(
+        @{ Name = "Step 1: Prepare";   Action = { Start-Sleep -Milliseconds 800 } },
+        @{ Name = "Step 2: Install";   Action = { Install-Module Az -Force -Scope CurrentUser } },
+        @{ Name = "Step 3: Configure"; Action = { Set-Item Env:\MY_VAR "hello" } }
+    )
+    Show-ProgressGUI -Steps $steps -Title "My Installer" -Heading "Installing components..."
+.NOTES
+    Author:  @MrTbone_se (T-bone Granheden)
+    Version: 1.1
 
-    .DESCRIPTION
-        Each step has a Name and an Action (scriptblock). The GUI shows a progress bar,
-        a current step label, and step indicator dots that turn yellow while running
-        and green when complete. The PowerShell console window is hidden automatically.
-        If a step throws, the indicator turns red and the window closes after 3 seconds.
-
-    .PARAMETER Steps
-        Array of hashtables, each with:
-            Name   [string]      - Display label  (e.g. "Step 1: Install")
-            Action [scriptblock] - Code to execute for that step
-
-    .PARAMETER Title
-        Window title bar text. Defaults to "Setup Progress".
-
-    .PARAMETER Heading
-        Large heading shown inside the window. Defaults to "Running Setup...".
-
-    .EXAMPLE
-        $steps = @(
-            @{ Name = "Step 1: Prepare";   Action = { Start-Sleep -Milliseconds 800 } },
-            @{ Name = "Step 2: Install";   Action = { Install-Module Az -Force -Scope CurrentUser } },
-            @{ Name = "Step 3: Configure"; Action = { Set-Item Env:\MY_VAR "hello" } }
-        )
-        Show-ProgressGUI -Steps $steps -Title "My Installer" -Heading "Installing components..."
-    #>
+    Version History:
+    1.0 - Initial version
+    1.1 - Cross-platform safe console-hide guard, dispose WinForms resources, List-backed control
+          collections, accurate help text, distinct warning vs. error labels, single shared silent runner
+#>
     [CmdletBinding()]
     param(
-
         [Parameter(Mandatory = $false, HelpMessage = 'Window title text shown in the title bar')]
         [string]$Title          = "Setup Progress",
 
         [Parameter(Mandatory = $false, HelpMessage = 'Large heading text shown inside the window')]
         [string]$Heading        = "Running Setup...",
-        
+
         [Parameter(Mandatory = $true, HelpMessage = 'Array of step objects with Name and Action keys to execute and display')]
         [hashtable[]]$Steps,
 
@@ -2241,58 +2469,7 @@ function Show-ProgressGUI {
         [switch]$NoGUI
     )
 
-    # Silent fallback if triggered by -NoGUI or if any GUI assembly fails to load.
-    if ($NoGUI) {
-        Write-Verbose "NoGUI is set. Running steps silently."
-        foreach ($step in $Steps) {
-            if (-not $step.ContainsKey('Name') -or -not $step.ContainsKey('Action')) {
-                Write-Error "Each step must have 'Name' and 'Action' keys. Got: $($step.Keys -join ', ')"
-                return
-            }
-            Write-Verbose "[$($step.Name)] Starting..."
-            try {
-                & $step.Action
-                Write-Verbose "[$($step.Name)] Done."
-            } catch {
-                Write-Error "[$($step.Name)] Failed: $_"
-                return
-            }
-        }
-        return
-    }
-
-    # Hide the console immediately for GUI runs so the user does not watch a shell while the form assemblies load.
-    if (-not ([System.Management.Automation.PSTypeName]'ConsoleWindow').Type) {
-        $ConsoleWindowSource = @(
-            'using System;'
-            'using System.Runtime.InteropServices;'
-            'public class ConsoleWindow {'
-            '    [DllImport("kernel32.dll")]'
-            '    public static extern IntPtr GetConsoleWindow();'
-            '    [DllImport("user32.dll")]'
-            '    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
-            '}'
-        ) -join [Environment]::NewLine
-        Add-Type -TypeDefinition $ConsoleWindowSource
-    }
-    [ConsoleWindow]::ShowWindow([ConsoleWindow]::GetConsoleWindow(), 0) | Out-Null
-
-    # Load WinForms assemblies, only when NoGUI is false
-    foreach ($asm in @('System.Windows.Forms', 'System.Drawing')) {
-        try {
-            Add-Type -AssemblyName $asm -ErrorAction Stop
-        } catch {
-            Write-Warning "Assembly '$asm' failed to load - falling back to silent execution. Error: $_"
-            foreach ($step in $Steps) {
-                Write-Verbose "[$($step.Name)] Starting..."
-                try   { & $step.Action; Write-Verbose "[$($step.Name)] Done." }
-                catch { Write-Error "[$($step.Name)] Failed: $_"; return }
-            }
-            return
-        }
-    }
-
-    # Validate step structure before starting the form to avoid showing a GUI that will fail immediately when it tries to run an invalid step.
+    # Validate step structure once up front so both -NoGUI and the GUI path get identical behaviour.
     foreach ($step in $Steps) {
         if (-not $step.ContainsKey('Name') -or -not $step.ContainsKey('Action')) {
             Write-Error "Each step must have 'Name' and 'Action' keys. Got: $($step.Keys -join ', ')"
@@ -2304,168 +2481,340 @@ function Show-ProgressGUI {
         }
     }
 
-    # Create the main form and set properties for a dark-themed progress window.
-    $form                 = New-Object System.Windows.Forms.Form
-    $form.Text            = $Title
-    $form.ClientSize      = New-Object System.Drawing.Size(510, 495)
-    $form.StartPosition   = "CenterScreen"
-    $form.FormBorderStyle = "FixedDialog"
-    $form.MaximizeBox     = $false
-    $form.MinimizeBox     = $false
-    $form.BackColor       = [System.Drawing.Color]::FromArgb(30, 30, 30)
-    $form.ForeColor       = [System.Drawing.Color]::White
-
-    # Build the heading label at the top of the form.
-    $lblTitle           = New-Object System.Windows.Forms.Label
-    $lblTitle.Text      = $Heading
-    $lblTitle.Font      = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
-    $lblTitle.ForeColor = [System.Drawing.Color]::White
-    $lblTitle.Location  = New-Object System.Drawing.Point(20, 15)
-    $lblTitle.Size      = New-Object System.Drawing.Size(470, 30)
-    $form.Controls.Add($lblTitle)
-
-    # Add a panel to hold the step labels and messages, with auto-scrolling for overflow.
-    $stepsPanel               = New-Object System.Windows.Forms.FlowLayoutPanel
-    $stepsPanel.Location      = New-Object System.Drawing.Point(20, 55)
-    $stepsPanel.Size          = New-Object System.Drawing.Size(470, 380)
-    $stepsPanel.BackColor     = [System.Drawing.Color]::FromArgb(20, 20, 20)
-    $stepsPanel.BorderStyle   = "FixedSingle"
-    $stepsPanel.FlowDirection = "TopDown"
-    $stepsPanel.WrapContents  = $false
-    $stepsPanel.AutoScroll    = $true
-    $stepsPanel.Padding       = New-Object System.Windows.Forms.Padding(6, 6, 6, 6)
-    $form.Controls.Add($stepsPanel)
-
-    # Pre-create one row per step with autosize and maximum size and a step label plus a hidden indented message label.
-    $rowWidth   = 430
-    $stepLabels = @()
-    $msgLabels  = @()
-    foreach ($step in $Steps) {
-        $lbl           = New-Object System.Windows.Forms.Label
-        $lbl.Text      = "* $($step.Name)"
-        $lbl.Font      = New-Object System.Drawing.Font("Segoe UI", 10)
-        $lbl.ForeColor = [System.Drawing.Color]::FromArgb(140, 140, 140)
-        $lbl.AutoSize  = $true
-        $lbl.MaximumSize = New-Object System.Drawing.Size($rowWidth, 0)
-        $lbl.Margin    = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
-        $stepsPanel.Controls.Add($lbl)
-        $stepLabels   += $lbl
-        $msg               = New-Object System.Windows.Forms.Label
-        $msg.Text          = ""
-        $msg.Font          = New-Object System.Drawing.Font("Consolas", 8)
-        $msg.ForeColor     = [System.Drawing.Color]::FromArgb(220, 180, 80)
-        $msg.AutoSize      = $true
-        $msg.MaximumSize   = New-Object System.Drawing.Size(($rowWidth - 20), 0)
-        $msg.Margin        = New-Object System.Windows.Forms.Padding(24, 1, 0, 0)
-        $msg.Visible       = $false
-        $stepsPanel.Controls.Add($msg)
-        $msgLabels        += $msg
+    # Silent runner shared by -NoGUI and the WinForms-load-failure fallback path.
+    $RunStepsSilently = {
+        foreach ($step in $Steps) {
+            Write-Verbose "[$($step.Name)] Starting..."
+            try   { & $step.Action; Write-Verbose "[$($step.Name)] Done." }
+            catch { Write-Error "[$($step.Name)] Failed: $_"; return }
+        }
     }
 
-    # Add an OK button that is initially hidden and only shown if there are errors or warnings, which the user can click to close the form.
-    $btnOK           = New-Object System.Windows.Forms.Button
-    $btnOK.Text      = "OK"
-    $btnOK.Location  = New-Object System.Drawing.Point(390, 445)
-    $btnOK.Size      = New-Object System.Drawing.Size(100, 28)
-    $btnOK.BackColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
-    $btnOK.ForeColor = [System.Drawing.Color]::White
-    $btnOK.FlatStyle = "Flat"
-    $btnOK.Visible   = $false
-    $btnOK.Add_Click({ $form.Close() })
-    $form.Controls.Add($btnOK)
+    if ($NoGUI) {
+        Write-Verbose "NoGUI is set. Running steps silently."
+        & $RunStepsSilently
+        return
+    }
 
-    # Run the steps when the form is shown, updating the step labels and message labels with colors and text based on the success or failure of each step.
-    $form.Add_Shown({
-        $totalSteps  = $Steps.Count
-        $errorCount  = 0
-        $warnCount   = 0
+    # Console-hide is Windows-only: the kernel32/user32 P/Invoke would crash on PS 7 on Linux/macOS.
+    $onWindows = ([Environment]::OSVersion.Platform -eq 'Win32NT')
+    if ($onWindows) {
+        if (-not ([System.Management.Automation.PSTypeName]'ConsoleWindow').Type) {
+            $ConsoleWindowSource = @(
+                'using System;'
+                'using System.Runtime.InteropServices;'
+                'public class ConsoleWindow {'
+                '    [DllImport("kernel32.dll")]'
+                '    public static extern IntPtr GetConsoleWindow();'
+                '    [DllImport("user32.dll")]'
+                '    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
+                '}'
+            ) -join [Environment]::NewLine
+            try { Add-Type -TypeDefinition $ConsoleWindowSource -ErrorAction Stop } catch { Write-Verbose "ConsoleWindow Add-Type failed: $_" }
+        }
+        try { [ConsoleWindow]::ShowWindow([ConsoleWindow]::GetConsoleWindow(), 0) | Out-Null } catch { Write-Verbose "ShowWindow call failed: $_" }
+    }
 
-        for ($i = 0; $i -lt $totalSteps; $i++) {
-            $step      = $Steps[$i]
-            $stepLabel = $stepLabels[$i]
-            $msgLabel  = $msgLabels[$i]
+    # Load WinForms assemblies (only when GUI is requested). On any failure run silently instead.
+    foreach ($asm in @('System.Windows.Forms', 'System.Drawing')) {
+        try {
+            Add-Type -AssemblyName $asm -ErrorAction Stop
+        } catch {
+            Write-Warning "Assembly '$asm' failed to load - falling back to silent execution. Error: $_"
+            & $RunStepsSilently
+            return
+        }
+    }
 
-            $stepLabel.ForeColor = [System.Drawing.Color]::FromArgb(255, 200, 50)  # yellow = running
-            $stepLabel.Text      = "* $($step.Name) - running..."
-            $stepsPanel.ScrollControlIntoView($stepLabel)
-            $form.Refresh()
+    # Create the main form and set properties for a dark-themed progress window.
+    $form = New-Object System.Windows.Forms.Form
+    try {
+        $form.Text            = $Title
+        $form.ClientSize      = New-Object System.Drawing.Size(510, 495)
+        $form.StartPosition   = "CenterScreen"
+        $form.FormBorderStyle = "FixedDialog"
+        $form.MaximizeBox     = $false
+        $form.MinimizeBox     = $false
+        $form.BackColor       = [System.Drawing.Color]::FromArgb(30, 30, 30)
+        $form.ForeColor       = [System.Drawing.Color]::White
 
-            $stepHasError   = $false
-            $stepHasWarning = $false
-            $stepMessages   = [System.Collections.Generic.List[string]]::new()
+        # Build the heading label at the top of the form.
+        $lblTitle           = New-Object System.Windows.Forms.Label
+        $lblTitle.Text      = $Heading
+        $lblTitle.Font      = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+        $lblTitle.ForeColor = [System.Drawing.Color]::White
+        $lblTitle.Location  = New-Object System.Drawing.Point(20, 15)
+        $lblTitle.Size      = New-Object System.Drawing.Size(470, 30)
+        $form.Controls.Add($lblTitle)
 
-            # Snapshot the global log buffer so we can detect ERROR/WARN entries written by
-            $logBefore = if ($global:_l) { $global:_l.Count } else { 0 }
-            try {
-                $rawOutput = & $step.Action 2>&1 3>&1
-                foreach ($item in $rawOutput) {
-                    if ($item -is [System.Management.Automation.WarningRecord]) {
-                        $stepMessages.Add($item.Message); $stepHasWarning = $true
-                    } elseif ($item -is [System.Management.Automation.ErrorRecord]) {
-                        $stepMessages.Add($item.Exception.Message); $stepHasError = $true
+        # Add a panel to hold the step labels and messages, with auto-scrolling for overflow.
+        $stepsPanel               = New-Object System.Windows.Forms.FlowLayoutPanel
+        $stepsPanel.Location      = New-Object System.Drawing.Point(20, 55)
+        $stepsPanel.Size          = New-Object System.Drawing.Size(470, 380)
+        $stepsPanel.BackColor     = [System.Drawing.Color]::FromArgb(20, 20, 20)
+        $stepsPanel.BorderStyle   = "FixedSingle"
+        $stepsPanel.FlowDirection = "TopDown"
+        $stepsPanel.WrapContents  = $false
+        $stepsPanel.AutoScroll    = $true
+        $stepsPanel.Padding       = New-Object System.Windows.Forms.Padding(6, 6, 6, 6)
+        $form.Controls.Add($stepsPanel)
+
+        # Pre-create one row per step (step label + hidden indented message label). SuspendLayout
+        # avoids an O(n) relayout on every Controls.Add.
+        $rowWidth   = 430
+        $stepLabels = [System.Collections.Generic.List[System.Windows.Forms.Label]]::new()
+        $msgLabels  = [System.Collections.Generic.List[System.Windows.Forms.Label]]::new()
+        $stepsPanel.SuspendLayout()
+        foreach ($step in $Steps) {
+            $lbl             = New-Object System.Windows.Forms.Label
+            $lbl.Text        = "* $($step.Name)"
+            $lbl.Font        = New-Object System.Drawing.Font("Segoe UI", 10)
+            $lbl.ForeColor   = [System.Drawing.Color]::FromArgb(140, 140, 140)
+            $lbl.AutoSize    = $true
+            $lbl.MaximumSize = New-Object System.Drawing.Size($rowWidth, 0)
+            $lbl.Margin      = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+            $stepsPanel.Controls.Add($lbl)
+            $stepLabels.Add($lbl)
+
+            $msg             = New-Object System.Windows.Forms.Label
+            $msg.Text        = ""
+            $msg.Font        = New-Object System.Drawing.Font("Consolas", 8)
+            $msg.ForeColor   = [System.Drawing.Color]::FromArgb(220, 180, 80)
+            $msg.AutoSize    = $true
+            $msg.MaximumSize = New-Object System.Drawing.Size(($rowWidth - 20), 0)
+            $msg.Margin      = New-Object System.Windows.Forms.Padding(24, 1, 0, 0)
+            $msg.Visible     = $false
+            $stepsPanel.Controls.Add($msg)
+            $msgLabels.Add($msg)
+        }
+        $stepsPanel.ResumeLayout()
+
+        # OK button - hidden until errors or warnings occur, then revealed for user dismissal.
+        $btnOK           = New-Object System.Windows.Forms.Button
+        $btnOK.Text      = "OK"
+        $btnOK.Location  = New-Object System.Drawing.Point(390, 445)
+        $btnOK.Size      = New-Object System.Drawing.Size(100, 28)
+        $btnOK.BackColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
+        $btnOK.ForeColor = [System.Drawing.Color]::White
+        $btnOK.FlatStyle = "Flat"
+        $btnOK.Visible   = $false
+        $btnOK.Add_Click({ $form.Close() })
+        $form.Controls.Add($btnOK)
+
+        # Run the steps when the form is shown, updating step labels with colors and text based on each step's outcome.
+        $form.Add_Shown({
+            $totalSteps  = $Steps.Count
+            $errorCount  = 0
+            $warnCount   = 0
+
+            for ($i = 0; $i -lt $totalSteps; $i++) {
+                $step      = $Steps[$i]
+                $stepLabel = $stepLabels[$i]
+                $msgLabel  = $msgLabels[$i]
+
+                $stepLabel.ForeColor = [System.Drawing.Color]::FromArgb(255, 200, 50)  # yellow = running
+                $stepLabel.Text      = "* $($step.Name) - running..."
+                $stepsPanel.ScrollControlIntoView($stepLabel)
+                $form.Refresh()
+
+                $stepHasError   = $false
+                $stepHasWarning = $false
+                $stepMessages   = [System.Collections.Generic.List[string]]::new()
+
+                # Snapshot the global log buffer so we can detect ERROR/WARN entries written by the step.
+                $logBefore = if ($global:_l) { $global:_l.Count } else { 0 }
+                try {
+                    $rawOutput = & $step.Action 2>&1 3>&1
+                    foreach ($item in $rawOutput) {
+                        if ($item -is [System.Management.Automation.WarningRecord]) {
+                            $stepMessages.Add($item.Message); $stepHasWarning = $true
+                        } elseif ($item -is [System.Management.Automation.ErrorRecord]) {
+                            $stepMessages.Add($item.Exception.Message); $stepHasError = $true
+                        }
+                    }
+                } catch {$stepMessages.Add($_.Exception.Message); $stepHasError = $true}
+
+                # Inspect log entries added during this step's execution and harvest ERROR/WARN messages.
+                if ($global:_l -and $global:_l.Count -gt $logBefore) {
+                    for ($li = $logBefore; $li -lt $global:_l.Count; $li++) {
+                        $entry = $global:_l[$li]
+                        if ($entry -match ',ERROR,[^,]*,[^,]*,(.*)$') {
+                            $stepMessages.Add($Matches[1]); $stepHasError = $true
+                        } elseif ($entry -match ',WARN,[^,]*,[^,]*,(.*)$') {
+                            $stepMessages.Add($Matches[1]); $stepHasWarning = $true
+                        }
                     }
                 }
-            } catch {$stepMessages.Add($_.Exception.Message); $stepHasError = $true}
-
-            # Inspect log entries added during this steps execution for any ERROR or WARN entries and extract the message text to show in the GUI.
-            if ($global:_l -and $global:_l.Count -gt $logBefore) {
-                for ($li = $logBefore; $li -lt $global:_l.Count; $li++) {
-                    $entry = $global:_l[$li]
-                    if ($entry -match ',ERROR,[^,]*,[^,]*,(.*)$') {
-                        $stepMessages.Add($Matches[1]); $stepHasError = $true
-                    } elseif ($entry -match ',WARN,[^,]*,[^,]*,(.*)$') {
-                        $stepMessages.Add($Matches[1]); $stepHasWarning = $true
-                    }
+                # Update labels based on outcome and accumulate counters for the final summary.
+                if ($stepHasError) {
+                    $errorCount++
+                    $stepLabel.ForeColor = [System.Drawing.Color]::FromArgb(220, 80, 80)   # red
+                    $stepLabel.Text      = "* $($step.Name) - Failed"
+                    $msgLabel.ForeColor  = [System.Drawing.Color]::FromArgb(220, 120, 120)
+                    $msgLabel.Text       = ($stepMessages -join [Environment]::NewLine)
+                    $msgLabel.Visible    = $true
+                } elseif ($stepHasWarning) {
+                    $warnCount++
+                    $stepLabel.ForeColor = [System.Drawing.Color]::FromArgb(255, 165, 0)   # orange
+                    $stepLabel.Text      = "* $($step.Name) - Completed with warnings"
+                    $msgLabel.ForeColor  = [System.Drawing.Color]::FromArgb(220, 180, 80)
+                    $msgLabel.Text       = ($stepMessages -join [Environment]::NewLine)
+                    $msgLabel.Visible    = $true
+                } else {
+                    $stepLabel.ForeColor = [System.Drawing.Color]::FromArgb(80, 200, 120)  # green
+                    $stepLabel.Text      = "* $($step.Name) - successful"
                 }
+                $form.Refresh()
             }
-            # Update the step label and message label based on whether the step had errors, warnings or was successful, and keep a count of total errors and warnings to show a summary at the end.
-            if ($stepHasError) {
-                $errorCount++
-                $stepLabel.ForeColor = [System.Drawing.Color]::FromArgb(220, 80, 80)   # red
-                $stepLabel.Text      = "* $($step.Name) - Failed"
-                $msgLabel.ForeColor  = [System.Drawing.Color]::FromArgb(220, 120, 120)
-                $msgLabel.Text       = ($stepMessages -join [Environment]::NewLine)
-                $msgLabel.Visible    = $true
-            } elseif ($stepHasWarning) {
-                $warnCount++
-                $stepLabel.ForeColor = [System.Drawing.Color]::FromArgb(255, 165, 0)   # orange
-                $stepLabel.Text      = "* $($step.Name) - Failed"
-                $msgLabel.ForeColor  = [System.Drawing.Color]::FromArgb(220, 180, 80)
-                $msgLabel.Text       = ($stepMessages -join [Environment]::NewLine)
-                $msgLabel.Visible    = $true
-            } else {
-                $stepLabel.ForeColor = [System.Drawing.Color]::FromArgb(80, 200, 120)  # green
-                $stepLabel.Text      = "* $($step.Name) - successful"
+            if ($errorCount -gt 0) {
+                $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(220, 80, 80)
+                if (-not $KeepHeading) { $lblTitle.Text = "Completed with errors" }
+                $btnOK.Visible      = $true
+                $form.Refresh()
             }
-            $form.Refresh()
-        }
-        if ($errorCount -gt 0) {
-            $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(220, 80, 80)
-            if (-not $KeepHeading) { $lblTitle.Text = "Completed with errors" }
-            $btnOK.Visible      = $true
-            $form.Refresh()
-        }
-        elseif ($warnCount -gt 0) {
-            $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(220, 160, 50)
-            if (-not $KeepHeading) { $lblTitle.Text = "Completed with warnings" }
-            $btnOK.Visible      = $true
-            $form.Refresh()
+            elseif ($warnCount -gt 0) {
+                $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(220, 160, 50)
+                if (-not $KeepHeading) { $lblTitle.Text = "Completed with warnings" }
+                $btnOK.Visible      = $true
+                $form.Refresh()
+            }
+            else {
+                $lblTitle.Text = "Complete!"
+                $form.Refresh()
+                Start-Sleep -Seconds 1
+                $form.Close()
+            }
+        })
+        [void]$form.ShowDialog()
+    }
+    finally {
+        if ($form) { try { $form.Dispose() } catch { Write-Verbose "Form Dispose failed: $_" } }
+    }
+}
+#endregion
+
+#region ---------------------------------------------------[[Reusable workflow scriptblocks]----------------------------------------
+# ====================> InstallScript (Runs only from Remediate, Intunewin, and elevated Manual installs and reinstalls)===============================================
+$InstallScript = {
+    # Replace legacy Mr T-Bone mapping script V1 and V2 if the flag is set (caller has already verified canInstall before invoking $InstallScript).
+    if ($ReplaceOldV1andV2) { Remove-LegacyV1V2Artifacts -ObjectType $ObjectType }
+    try {
+        $null = New-Item -ItemType Directory -Path (Split-Path $ScriptSavePath -Parent) -Force -ErrorAction Stop
+        Copy-Item -Path $PSCommandPath -Destination $ScriptSavePath -Force -ErrorAction Stop
+        [System.IO.File]::WriteAllText($JSSavePath, $JSLauncherContent, [System.Text.Encoding]::ASCII)
+        $null = New-Item -ItemType Directory -Path (Split-Path $ShortcutLauncherPath -Parent) -Force -ErrorAction Stop
+        [System.IO.File]::WriteAllText($ShortcutLauncherPath, $ShortcutLauncherContent, [System.Text.Encoding]::ASCII)
+        Set-Content -Path $VersionFilePath -Value $MappingVersion.ToString() -Force -ErrorAction Stop
+    }
+    catch { Write-Error "Failed to stage install artifacts. Error: $_"; $script:ScriptExitCode = 5; return $false }
+    $taskRegistered = Register-IntuneTask `
+        -TaskName              $TaskName `
+        -TaskDescription       $TaskDescription `
+        -TaskExecute           "$env:SystemRoot\System32\wscript.exe" `
+        -TaskArgument          "`"$JSSavePath`" `"$ScriptSavePath`"" `
+        -TaskPrincipalGroupSid $UsersGroupSid `
+        -TaskTriggerAtLogon:$RunAtLogon `
+        -TaskTriggerAtNetConnect:$RunAtNetConnect `
+        -TaskHidden `
+        -TaskForce `
+        -TaskStartImmediately
+    if (-not $taskRegistered) { $script:ScriptExitCode = 4; return $false }
+    $arpRegistered = Add-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppVersion $ARPAppVersion -ARPAppGuid $ARPAppGuid -ARPAppPublisher $ARPAppPublisher -ARPAppFolder $ARPAppFolder -ARPAppEnableUninstall $ARPAppEnableUninstall `
+        -ARPAppEnableModify $ARPAppEnableModify -ARPAppIcon $ARPAppIcon -ARPAppIconPath $ARPAppIconPath -ARPAppInstallScript $ARPAppInstallScript -ARPAppUnInstallScript $ARPAppUnInstallScript -ARPAppIncludeFolder $ARPAppIncludeFolder `
+        -ARPAppUserStartFile $EffectiveStartFile -ARPAppShortcutOnDesktop $ARPAppShortcutOnDesktop -ARPAppShortcutInStart $ARPAppShortcutInStart -ARPAppForce ($ARPAppForce -or $forceReinstall)
+    if (-not $arpRegistered) { Write-Error "Failed to register Add/Remove Programs entry."; $script:ScriptExitCode = 6; return $false }
+    return $true
+}
+
+# ====================> WorkflowScript (Resolves AD groups, builds Steps, optionally removes stale objects and runs the mapping with or without GUI) ==================
+$WorkflowScript = {
+    param([bool]$ShowGui)
+    $dcOk       = $true
+    $UserGroups = Get-ADGroupMemberships -Domain $DomainName -RequiredGroups $RequiredGroups -DCAvailable ([ref]$dcOk)
+    if (-not $dcOk) {
+        $dcMsg = $DomainName
+        if ($ShowGui) { Show-ProgressGUI -Steps @(@{ Name = "Domain network not available"; Action = [scriptblock]::Create("Write-Warning 'No domain controller was reachable for ''$dcMsg''. Network drive/printer mappings are skipped.'") }) -Title $TaskName -Heading "Domain network not available" -KeepHeading }
+        else {Write-Warning "No domain controller was reachable for '$dcMsg'. Network drive/printer mappings are skipped."}
+        return
+    }
+    #Build the list of objects to map
+    $FilteredMapObjects = @($MapObjects | Where-Object { [string]::IsNullOrEmpty($_['ADGroups']) -or $_['ADGroups'] -in $UserGroups })
+    $Steps              = @()
+    foreach ($obj in $FilteredMapObjects) { if ($ObjectType -eq 'Printer') {
+            $escapedPrinterName  = $obj.PrinterName -replace "'", "''"
+            $escapedPrinterPath  = $obj.Path -replace "'", "''"
+            $printerDefaultValue = $obj.Default.ToString().ToLower()
+            $Steps += @{
+                Name   = "Map Printer: $($obj.PrinterName)"
+                Action = [scriptblock]::Create("New-PrinterMapping -PrinterName '$escapedPrinterName' -PrinterPath '$escapedPrinterPath' -PrinterDefault `$$printerDefaultValue")
+            }
         }
         else {
-            $lblTitle.Text = "Complete!"
-            $form.Refresh()
-            Start-Sleep -Seconds 1
-            $form.Close()
+            $label              = if ($obj.ContainsKey('Label'))      { $obj.Label }      else { '' }
+            $persistent         = if ($obj.ContainsKey('Persistent')) { $obj.Persistent } else { $true }
+            $escapedDriveLetter = $obj.Letter -replace "'", "''"
+            $escapedDrivePath   = $obj.Path -replace "'", "''"
+            $escapedDriveLabel  = $label -replace "'", "''"
+            $persistentValue    = $persistent.ToString().ToLower()
+            $Steps += @{
+                Name   = "Map Drive $($obj.Letter):"
+                Action = [scriptblock]::Create("New-DriveMapping -DriveLetter '$escapedDriveLetter' -DrivePath '$escapedDrivePath' -DriveLabel '$escapedDriveLabel' -DrivePersistent `$$persistentValue")
+            }
+        } }
+    # Remove stale objects
+    if ($RemoveStaleObjects) { 
+        if ($ObjectType -eq 'Printer') {
+            $activePaths = @($FilteredMapObjects | ForEach-Object { $_['Path'] })
+            Get-Printer -EA SilentlyContinue | Where-Object { $_.Type -eq 'Connection' -and $_.Name -notin $activePaths } | ForEach-Object {
+                $pName  = $_.Name
+                $Steps += @{ Name = "Remove stale printer: $pName"; Action = [scriptblock]::Create("Remove-Printer -Name '$($pName -replace "'","''")' -EA SilentlyContinue") }
+            }
         }
-    })
-    [void]$form.ShowDialog()
+        else {
+            $activeLetters = @($FilteredMapObjects | ForEach-Object { $_['Letter'] })
+            Get-PSDrive -PSProvider FileSystem -EA SilentlyContinue | Where-Object { $_.DisplayRoot -like '\\*' -and $_.Name -notin $activeLetters } | ForEach-Object {
+                $dLetter = $_.Name
+                $Steps  += @{ Name = "Remove stale drive ${dLetter}:"; Action = [scriptblock]::Create("net use ${dLetter}: /delete 2>&1 | Out-Null") }
+            }
+        } }
+
+    if ($Steps.Count -gt 0) { Show-ProgressGUI -Steps $Steps -NoGUI:(-not $ShowGui) -Title $TaskName -Heading "Mapping $($ObjectType)s..." }
+    else { Write-Host "No $ObjectType mappings applicable for current user" }
+}
+
+# ====================> UninstallScript (Removes scheduled task, staged artifacts, and ARP entry. Optional uninstall helper script runs first) ========================
+$UninstallScript = {
+    if ($ARPAppUnInstallScript -and (Test-Path -LiteralPath $ARPAppUnInstallScript)) { try {
+
+            Write-Verbose "Running uninstall helper script: $ARPAppUnInstallScript"
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ARPAppUnInstallScript
+        } catch {Write-Warning "Failed to run uninstall helper script $ARPAppUnInstallScript. Error: $_"} }
+
+    try {
+        $tsService = New-Object -ComObject 'Schedule.Service'
+        $tsService.Connect()
+        $tsService.GetFolder('\').DeleteTask($TaskName, 0)
+        Write-Verbose "Scheduled task removed: $TaskName"
+    } catch { if ($ExistingTask) { Write-Warning "Failed to remove scheduled task $TaskName. Error: $_" }
+
+        else { Write-Verbose "Scheduled task not found: $TaskName" } }
+
+    foreach ($ArtifactPath in @($ScriptSavePath, $JSSavePath, $VersionFilePath)) { if (Test-Path -LiteralPath $ArtifactPath) { try {
+
+
+                Remove-Item -LiteralPath $ArtifactPath -Force -ErrorAction Stop
+                Write-Verbose "Removed artifact: $ArtifactPath"
+            } catch {Write-Warning "Failed to remove artifact $ArtifactPath. Error: $_"} }
+ }
+
+    $null = Remove-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppGuid $ARPAppGuid -ARPAppFolder $ARPAppFolder -ARPAppPublisher $ARPAppPublisher
 }
 #endregion
 
 #region ---------------------------------------------------[[Script Execution]------------------------------------------------------
-# Start T-Bone custom logging (can be removed if you don't want to use T-Bone logging)
+# Start T-Bone custom logging
 Invoke-TboneLog -LogMode Start -Logname $LogName -LogToGUI $LogToGUI -LogToEventlog $LogToEventlog -LogEventIds $LogEventIds -LogToDisk $LogToDisk -LogPath $LogToDiskPath -LogToHost $LogToHost
-
+#declare variables to track state and results across execution
 [int]$ScriptExitCode    = 0
 [string]$ExecutionMode  = 'Unknown'
 [object[]]$ScriptLog    = @()
@@ -2473,26 +2822,30 @@ Invoke-TboneLog -LogMode Start -Logname $LogName -LogToGUI $LogToGUI -LogToEvent
 [bool]$compliant        = $false
 [version]$savedVersion  = [version]'0.0'
 $ExistingTask           = $null
-# Manual force flag: set by either the in-script $ForceReplaceAll or the -InstallType Repair parameter.
+$CTX                    = $null
 [bool]$forceReinstall   = $ForceReplaceAll -or ($InstallType -eq 'Repair')
-
 # Resolve which file the All-Users desktop/start shortcuts should target. If the caller did not supply an explicit ARPAppUserStartFile, default to the silent JS launcher
 [string]$EffectiveStartFile = if ([string]::IsNullOrWhiteSpace($ARPAppUserStartFile)) { $ShortcutLauncherPath } else { $ARPAppUserStartFile }
-
-# ==============================================================================================================================================    
-# ==========> Get the execution context to determine script behavior   <========================================================================    
-# ==============================================================================================================================================    
+# Set or clear the MapperShowGUI to specify if the scheduled task should run with or without GUI
+$SetUserGuiFlag = {
+    try   { [System.Environment]::SetEnvironmentVariable('MapperShowGUI', '1',   'User'); return $true }
+    catch { Write-Warning "Failed to set user-scope MapperShowGUI override. Error: $_"; return $false }
+}
+$ClearUserGuiFlag = {
+    try   { [System.Environment]::SetEnvironmentVariable('MapperShowGUI', $null, 'User') }
+    catch { Write-Verbose "Failed to delete user-scope MapperShowGUI: $_" }
+}
+# ==========> Get the execution context to determine script behavior   <========================================================================
 try {
-    # Auto-require x64 on a 64-bit OS (unless the caller pinned a different value): a 32-bit host would otherwise install into 'Program Files (x86)' and write the ARP/Uninstall key under Wow6432Node, which is invisible to Intune MSI/Registry detection rules.
+    # Validate $MapObjects shape early so configuration errors surface with a readable message before context detection or any side effects.
+    try { $null = Test-MapObjectValidation -MapObjects $MapObjects }
+    catch { throw [System.ArgumentException]::new("Configuration validation failed: $($_.Exception.Message)") }
+    # Auto-require x64 on a 64-bit OS (unless the caller pinned a different value)
     if (-not $CTXReqArchitecture -and [Environment]::Is64BitOperatingSystem) { $CTXReqArchitecture = 'x64' }
-    $CTX = Get-ExecutionContext -CTXReqIdentity $CTXReqIdentity -CTXReqArchitecture $CTXReqArchitecture -CTXAutoRelaunchToX64:$CTXAutoRelaunchToX64 -CTXReqPSVersion $CTXReqPSVersion -CTXReqOSBuild $CTXReqOSBuild -CTXAbortIfPendingReboot:$CTXAbortIfPendingReboot -CTXForwardParameters $PSBoundParameters
-    if (-not $CTX) {
-        $ScriptExitCode = 2
-        Write-Warning "Execution context validation failed. Exiting with code $ScriptExitCode."
-    }
+    $CTX = Get-RuntimeContext -CTXReqIdentity $CTXReqIdentity -CTXReqArchitecture $CTXReqArchitecture -CTXAutoRelaunchToX64:$CTXAutoRelaunchToX64 -CTXReqPSVersion $CTXReqPSVersion -CTXReqOSBuild $CTXReqOSBuild -CTXAbortIfPendingReboot:$CTXAbortIfPendingReboot -CTXForwardParameters $PSBoundParameters
+    if (-not $CTX) { Write-Warning "Execution context validation failed. Exiting with code 2."; $ScriptExitCode = 2 }
     else {
-        $MapperShowGUIOverride = $EndUserGUI -and (([System.Environment]::GetEnvironmentVariable('MapperShowGUI') -eq '1') -or
-                                 ([System.Environment]::GetEnvironmentVariable('MapperShowGUI', 'User') -eq '1'))
+        $MapperShowGUIOverride = $EndUserGUI -and (([System.Environment]::GetEnvironmentVariable('MapperShowGUI') -eq '1') -or ([System.Environment]::GetEnvironmentVariable('MapperShowGUI', 'User') -eq '1'))
         $ExecutionMode = switch ($true) {
             ($CTX.CTXMode   -eq 'Intunewin')     { 'Intunewin';     break }
             ($CTX.CTXMode   -eq 'Detection')     { 'Detect';        break }
@@ -2502,10 +2855,7 @@ try {
             default                              { 'Manual' }
         }
         Write-Verbose "ExecutionMode = $ExecutionMode (CTXMode=$($CTX.CTXMode), CTXSource=$($CTX.CTXSource), CTXIdentity=$($CTX.CTXIdentity))"
-
-        # ==============================================================================================================================================    
-        # ==========> Detect if compliant (Just detect and use result in different execution modes)<====================================================
-        # ==============================================================================================================================================    
+# ==========> Detect compliance (Just detect if compliant and use result in different execution modes)<=========================================
         [bool]$canInstall = $CTX.CTXIdentity -in @('System', 'Admin')
         $ExistingTask = $null
         try {
@@ -2529,327 +2879,85 @@ try {
             $shouldReinstall = -not $compliant
         }
         Write-Verbose "Compliance=$compliant, ForceReplaceAll=$ForceReplaceAll, InstallType=$InstallType, ForceReinstall=$forceReinstall, ShouldReinstall=$shouldReinstall, CanInstall=$canInstall"
-
-        # ==============================================================================================================================================    
-        # ==========> Uninstall (If InstallType is UnInstall and the user has sufficient privileges to uninstall)<======================================
-        # ==============================================================================================================================================    
+    # ==========> Uninstall (If InstallType is UnInstall and the user has sufficient privileges to uninstall)<======================================
         if ($InstallType -eq 'UnInstall') {
-            if (-not $canInstall) {
-                Write-Warning "InstallType '$InstallType' requires System or Admin. Current identity: $($CTX.CTXIdentity)"
-                $ScriptExitCode = 3
-            }
-            else {
-                if ($ARPAppUnInstallScript -and (Test-Path -LiteralPath $ARPAppUnInstallScript)) {
-                    try {
-                        Write-Verbose "Running uninstall helper script: $ARPAppUnInstallScript"
-                        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ARPAppUnInstallScript
-                    } catch {Write-Warning "Failed to run uninstall helper script $ARPAppUnInstallScript. Error: $_"}
-                }
-
-                try {
-                    $tsService = New-Object -ComObject 'Schedule.Service'
-                    $tsService.Connect()
-                    $tsService.GetFolder('\').DeleteTask($TaskName, 0)
-                    Write-Verbose "Scheduled task removed: $TaskName"
-                } catch {
-                    if ($ExistingTask) { Write-Warning "Failed to remove scheduled task $TaskName. Error: $_" }
-                    else { Write-Verbose "Scheduled task not found: $TaskName" }
-                }
-
-                foreach ($ArtifactPath in @($ScriptSavePath, $JSSavePath, $VersionFilePath)) {
-                    if (Test-Path -LiteralPath $ArtifactPath) {
-                        try {
-                            Remove-Item -LiteralPath $ArtifactPath -Force -ErrorAction Stop
-                            Write-Verbose "Removed artifact: $ArtifactPath"
-                        } catch {Write-Warning "Failed to remove artifact $ArtifactPath. Error: $_"}
-                    }
-                }
-                $null = Remove-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppGuid $ARPAppGuid -ARPAppFolder $ARPAppFolder -ARPAppPublisher $ARPAppPublisher
-                $ScriptExitCode = 0
-            }
+            if (-not $canInstall) { Write-Warning "InstallType '$InstallType' requires System or Admin. Current identity: $($CTX.CTXIdentity)"; $ScriptExitCode = 3 }
+            else                  { & $UninstallScript; $ScriptExitCode = 0 }
         }
-        else {
-            # ==============================================================================================================================================    
-            # ==========> Detect with Intune Remediaton (Check compliance without making changes)<==========================================================
-            # ==============================================================================================================================================
-            switch ($ExecutionMode) {
+        else { switch ($ExecutionMode) {
+    # ==========> Detect with Intune Remediaton (Check compliance without making changes)<==========================================================
                 'Detect' {
                     $EmitDetectOutput = $true
                     if ($compliant) { $ScriptExitCode = 0 }
                     else { $ScriptExitCode = 1 }
                 }
-            # ==============================================================================================================================================    
-            # ==========> Remediate with Intune Remediaton (Make changes to achieve compliance)<============================================================
-            # ==============================================================================================================================================
+    # ==========> Remediate with Intune Remediaton (Make changes to achieve compliance)<============================================================
                 'Remediate' {
                     if (-not $canInstall) { Write-Warning "ExecutionMode '$ExecutionMode' requires System or Admin to install or remediate. Current identity: $($CTX.CTXIdentity)"; $ScriptExitCode = 3; break }
                     if (-not ($shouldReinstall -or $forceReinstall)) { Write-Host "ExecutionMode '$ExecutionMode' and Compliant: $TaskName v$savedVersion - skipping install or remediation"; $ScriptExitCode = 0; break }
-                    try {
-                        $null = New-Item -ItemType Directory -Path (Split-Path $ScriptSavePath -Parent) -Force -ErrorAction Stop
-                        Copy-Item -Path $PSCommandPath -Destination $ScriptSavePath -Force -ErrorAction Stop
-                        [System.IO.File]::WriteAllText($JSSavePath, $JSLauncherContent, [System.Text.Encoding]::ASCII)
-                        $null = New-Item -ItemType Directory -Path (Split-Path $ShortcutLauncherPath -Parent) -Force -ErrorAction Stop
-                        [System.IO.File]::WriteAllText($ShortcutLauncherPath, $ShortcutLauncherContent, [System.Text.Encoding]::ASCII)
-                        Set-Content -Path $VersionFilePath -Value $MappingVersion.ToString() -Force -ErrorAction Stop
-                    }
-                    catch {
-                        Write-Error "Failed to stage remediation artifacts. Error: $_"
-                        $ScriptExitCode = 5
-                        break
-                    }
-                    $taskRegistered = New-ScheduledTask `
-                        -TaskName              $TaskName `
-                        -TaskDescription       $TaskDescription `
-                        -TaskExecute           "$env:SystemRoot\System32\wscript.exe" `
-                        -TaskArgument          "`"$JSSavePath`" `"$ScriptSavePath`"" `
-                        -TaskPrincipalGroupSid $UsersGroupSid `
-                        -TaskTriggerAtLogon `
-                        -TaskHidden `
-                        -TaskForce `
-                        -TaskStartImmediately
-                    if (-not $taskRegistered) { $ScriptExitCode = 4; break }
-                    $arpRegistered = Add-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppVersion $ARPAppVersion -ARPAppGuid $ARPAppGuid -ARPAppPublisher $ARPAppPublisher -ARPAppFolder $ARPAppFolder -ARPAppEnableUninstall $ARPAppEnableUninstall `
-                        -ARPAppEnableModify $ARPAppEnableModify -ARPAppIcon $ARPAppIcon -ARPAppIconPath $ARPAppIconPath -ARPAppInstallScript $ARPAppInstallScript -ARPAppUnInstallScript $ARPAppUnInstallScript -ARPAppIncludeFolder $ARPAppIncludeFolder `
-                        -ARPAppUserStartFile $EffectiveStartFile -ARPAppShortcutOnDesktop $ARPAppShortcutOnDesktop -ARPAppShortcutInStart $ARPAppShortcutInStart -ARPAppForce ($ARPAppForce -or $forceReinstall)
-                    if (-not $arpRegistered) { Write-Error "Failed to register Add/Remove Programs entry for remediation install."; $ScriptExitCode = 6; break }
-                    $ScriptExitCode = 0
+                    if (& $InstallScript) { $ScriptExitCode = 0 }
                 }
-            # ==============================================================================================================================================
-            # ==========> Install with Intune Win32App (Install if the application is not compliant)<=======================================================
-            # ==============================================================================================================================================
+    # ==========> Install with Intune Win32App (Install if the application is not compliant)<=======================================================
                 'Intunewin' {
                     if (-not $canInstall) { Write-Warning "ExecutionMode '$ExecutionMode' requires System or Admin to install or remediate. Current identity: $($CTX.CTXIdentity)"; $ScriptExitCode = 3; break }
                     if (-not ($shouldReinstall -or $forceReinstall)) { Write-Host "ExecutionMode '$ExecutionMode' and Compliant: $TaskName v$savedVersion - skipping install or remediation"; $ScriptExitCode = 0; break }
-                    try {
-                        $null = New-Item -ItemType Directory -Path (Split-Path $ScriptSavePath -Parent) -Force -ErrorAction Stop
-                        Copy-Item -Path $PSCommandPath -Destination $ScriptSavePath -Force -ErrorAction Stop
-                        [System.IO.File]::WriteAllText($JSSavePath, $JSLauncherContent, [System.Text.Encoding]::ASCII)
-                        $null = New-Item -ItemType Directory -Path (Split-Path $ShortcutLauncherPath -Parent) -Force -ErrorAction Stop
-                        [System.IO.File]::WriteAllText($ShortcutLauncherPath, $ShortcutLauncherContent, [System.Text.Encoding]::ASCII)
-                        Set-Content -Path $VersionFilePath -Value $MappingVersion.ToString() -Force -ErrorAction Stop
-                    }
-                    catch {
-                        Write-Error "Failed to stage IntuneWin artifacts. Error: $_"
-                        $ScriptExitCode = 5
-                        break
-                    }
-                    $taskRegistered = New-ScheduledTask `
-                        -TaskName              $TaskName `
-                        -TaskDescription       $TaskDescription `
-                        -TaskExecute           "$env:SystemRoot\System32\wscript.exe" `
-                        -TaskArgument          "`"$JSSavePath`" `"$ScriptSavePath`"" `
-                        -TaskPrincipalGroupSid $UsersGroupSid `
-                        -TaskTriggerAtLogon `
-                        -TaskHidden `
-                        -TaskForce `
-                        -TaskStartImmediately
-                    if (-not $taskRegistered) { $ScriptExitCode = 4; break }
-                    $arpRegistered = Add-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppVersion $ARPAppVersion -ARPAppGuid $ARPAppGuid -ARPAppPublisher $ARPAppPublisher -ARPAppFolder $ARPAppFolder -ARPAppEnableUninstall $ARPAppEnableUninstall `
-                        -ARPAppEnableModify $ARPAppEnableModify -ARPAppIcon $ARPAppIcon -ARPAppIconPath $ARPAppIconPath -ARPAppInstallScript $ARPAppInstallScript -ARPAppUnInstallScript $ARPAppUnInstallScript -ARPAppIncludeFolder $ARPAppIncludeFolder `
-                        -ARPAppUserStartFile $EffectiveStartFile -ARPAppShortcutOnDesktop $ARPAppShortcutOnDesktop -ARPAppShortcutInStart $ARPAppShortcutInStart -ARPAppForce ($ARPAppForce -or $forceReinstall)
-                    if (-not $arpRegistered) { Write-Error "Failed to register Add/Remove Programs entry for IntuneWin install."; $ScriptExitCode = 6; break }
-                    $ScriptExitCode = 0
+                    if (& $InstallScript) { $ScriptExitCode = 0 }
                 }
-            # ==============================================================================================================================================    
-            # ==========> Manual execution (Install if not compliant and user is elevated or only run existing scheduledtask)<==============================
-            # ==============================================================================================================================================
+    # ==========> Manual execution (Install if not compliant and user is elevated or only run existing scheduledtask)<==============================
                 'Manual' {
-                    if ($canInstall -and ($shouldReinstall -or $forceReinstall)) { # Manual run with elevation, non-compliant or force-reinstall requested - install or repair the scheduled task
+                    # Install or repair (Manual run with permissions to install or repair, and either non-compliant or force-reinstall requested) 
+                    if ($canInstall -and ($shouldReinstall -or $forceReinstall)) { 
                         Write-verbose "Elevated manual run detected - installing or repairing all scheduled-task components (ShouldReinstall=$shouldReinstall, ForceReinstall=$forceReinstall)"
-                        $null = New-Item -ItemType Directory -Path (Split-Path $ScriptSavePath -Parent) -Force -EA SilentlyContinue
-                        Copy-Item -Path $PSCommandPath -Destination $ScriptSavePath -Force
-                        [System.IO.File]::WriteAllText($JSSavePath, $JSLauncherContent, [System.Text.Encoding]::ASCII)
-                        [System.IO.File]::WriteAllText($ShortcutLauncherPath, $ShortcutLauncherContent, [System.Text.Encoding]::ASCII)
-                        Set-Content -Path $VersionFilePath -Value $MappingVersion.ToString() -Force
-                        $taskRegistered = New-ScheduledTask `
-                            -TaskName              $TaskName `
-                            -TaskDescription       $TaskDescription `
-                            -TaskExecute           "$env:SystemRoot\System32\wscript.exe" `
-                            -TaskArgument          "`"$JSSavePath`" `"$ScriptSavePath`"" `
-                            -TaskPrincipalGroupSid $UsersGroupSid `
-                            -TaskTriggerAtLogon `
-                            -TaskHidden `
-                            -TaskForce `
-                            -TaskStartImmediately
-                        if (-not $taskRegistered) { $ScriptExitCode = 4; break }
-                        $null = Add-AddRemovePrograms -ARPAppName $ARPAppName -ARPAppVersion $ARPAppVersion -ARPAppGuid $ARPAppGuid -ARPAppPublisher $ARPAppPublisher -ARPAppFolder $ARPAppFolder -ARPAppEnableUninstall $ARPAppEnableUninstall `
-                            -ARPAppEnableModify $ARPAppEnableModify -ARPAppIcon $ARPAppIcon -ARPAppIconPath $ARPAppIconPath -ARPAppInstallScript $ARPAppInstallScript -ARPAppUnInstallScript $ARPAppUnInstallScript -ARPAppIncludeFolder $ARPAppIncludeFolder `
-                            -ARPAppUserStartFile $EffectiveStartFile -ARPAppShortcutOnDesktop $ARPAppShortcutOnDesktop -ARPAppShortcutInStart $ARPAppShortcutInStart -ARPAppForce ($ARPAppForce -or $forceReinstall)
-                        $ScriptExitCode = 0
+                        if (& $InstallScript) { $ScriptExitCode = 0 }
                     }
-                    elseif ($ExistingTask -and -not ($shouldReinstall -or $forceReinstall)) { # Manual run and compliant state - run the mapping directly with GUI override
-                        [bool]$clearUserGuiOverride = $false
+                    # Run the workflow with or without GUI (Manual run with compliant state and existing scheduled task)
+                    elseif ($ExistingTask -and -not ($shouldReinstall -or $forceReinstall)) { 
+                        $guiFlagSet = $false
                         if ($EndUserGUI) {
-                            try {
-                                $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
-                                if ($envKey) {
-                                    try { $envKey.SetValue('MapperShowGUI', '1', [Microsoft.Win32.RegistryValueKind]::String) } finally { $envKey.Close() }
-                                }
-                                $clearUserGuiOverride = $true
-                                Write-Verbose "Set MapperShowGUI=1 in User scope (registry) - starting scheduled task '$TaskName' with GUI override"
-                            } catch { Write-Warning "Failed to set user-scope MapperShowGUI override. Error: $_" }
+                            $guiFlagSet = & $SetUserGuiFlag
+                            if ($guiFlagSet) { Write-Verbose "Set MapperShowGUI=1 in user-scope registry - starting scheduled task '$TaskName' with GUI override" }
                         }
-                        else {Write-Verbose "Starting scheduled task '$TaskName' without GUI override"}
+                        else { Write-Verbose "Starting scheduled task '$TaskName' without GUI override" }
                         try {
                             $tsService = New-Object -ComObject 'Schedule.Service'
                             $tsService.Connect()
-                            $tsFolder = $tsService.GetFolder('\')
-                            $tsTask = $tsFolder.GetTask($TaskName)
-                            $null = $tsTask.Run($null)
-                            Write-Verbose "Started scheduled task '$TaskName' with GUI $(if ($MapperShowGUIOverride) { 'disabled' } else { 'enabled' })"
-                            $clearUserGuiOverride = $false
+                            $null = $tsService.GetFolder('\').GetTask($TaskName).Run($null)
+                            Write-Verbose "Started scheduled task '$TaskName' with GUI $(if ($guiFlagSet) { 'enabled' } else { 'disabled' })"
+                            $guiFlagSet     = $false   # task now owns the flag
+                            $ScriptExitCode = 0
                         }
-                        catch {
-                            Write-Warning "Failed to start scheduled task '$TaskName'. Error: $_"
-                            $ScriptExitCode = 4
-                            break
-                        }
-                        finally {
-                            if ($clearUserGuiOverride) {
-                                try {
-                                    $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
-                                    if ($envKey) { try { $envKey.DeleteValue('MapperShowGUI', $false) } finally { $envKey.Close() } }
-                                } catch {}
-                            }
-                        }
-                        $ScriptExitCode = 0
+                        catch   { Write-Warning "Failed to start scheduled task '$TaskName'. Error: $_"; $ScriptExitCode = 4 }
+                        finally { if ($guiFlagSet) { & $ClearUserGuiFlag } }
                     }
-                    else { # Manual run with non-compliant state but cannot install - run the mapping directly for this session only (with GUI override)
-                        if (($shouldReinstall -or $forceReinstall) -and -not $canInstall) {
-                            Write-Warning "Non-compliant or force-reinstall requested, but current identity '$($CTX.CTXIdentity)' cannot install or repair. Running mapping directly for this session only"
-                        }
+                    # Exit or Run the workflow with or without GUI in non-compliant state (Manual run with non-compliant state but cannot install)
+                    else { 
+                        if (($shouldReinstall -or $forceReinstall) -and -not $canInstall) { Write-Warning "Non-compliant or force-reinstall requested, but current identity '$($CTX.CTXIdentity)' cannot install or repair. Running mapping directly for this session only" }
                         elseif (-not $ExistingTask) {Write-Warning "Scheduled task '$TaskName' not found - running mapping directly"}
-                        $dcOk               = $true
-                        $UserGroups         = Get-ADGroupMemberships -Domain $DomainName -RequiredGroups $RequiredGroups -DCAvailable ([ref]$dcOk)
-                        if (-not $dcOk) {
-                            $dcMsg = $DomainName
-                            if ($EndUserGUI -and -not $CTX.CTXNoGUISupport) {
-                                Show-ProgressGUI -Steps @(@{ Name = "Domain network not available"; Action = [scriptblock]::Create("Write-Warning 'No domain controller was reachable for ''$dcMsg''. Network drive/printer mappings are skipped.'") }) -Title $TaskName -Heading "Domain network not available" -KeepHeading
-                            }
-                            else {Write-Warning "No domain controller was reachable for '$dcMsg'. Network drive/printer mappings are skipped."}
-                            $ScriptExitCode = 0; break
-                        }
-                        $FilteredMapObjects = @($MapObjects | Where-Object { [string]::IsNullOrEmpty($_['ADGroups']) -or $_['ADGroups'] -in $UserGroups })
-                        $Steps              = @()
-                        foreach ($obj in $FilteredMapObjects) {
-                            if ($ObjectType -eq 'Printer') {
-                                $escapedPrinterName = $obj.PrinterName -replace "'", "''"
-                                $escapedPrinterPath = $obj.Path -replace "'", "''"
-                                $printerDefaultValue = $obj.Default.ToString().ToLower()
-                                $Steps += @{
-                                    Name   = "Map Printer: $($obj.PrinterName)"
-                                    Action = [scriptblock]::Create("New-PrinterMapping -PrinterName '$escapedPrinterName' -PrinterPath '$escapedPrinterPath' -PrinterDefault `$$printerDefaultValue")
-                                }
-                            }
-                            else {
-                                $label      = if ($obj.ContainsKey('Label'))      { $obj.Label }      else { '' }
-                                $persistent = if ($obj.ContainsKey('Persistent')) { $obj.Persistent } else { $true }
-                                $escapedDriveLetter = $obj.Letter -replace "'", "''"
-                                $escapedDrivePath = $obj.Path -replace "'", "''"
-                                $escapedDriveLabel = $label -replace "'", "''"
-                                $persistentValue = $persistent.ToString().ToLower()
-                                $Steps += @{
-                                    Name   = "Map Drive $($obj.Letter):"
-                                    Action = [scriptblock]::Create("New-DriveMapping -DriveLetter '$escapedDriveLetter' -DrivePath '$escapedDrivePath' -DriveLabel '$escapedDriveLabel' -DrivePersistent `$$persistentValue")
-                                }
-                            }
-                        }
-                        if ($RemoveStaleObjects) {
-                            if ($ObjectType -eq 'Printer') {
-                                $activePaths = @($FilteredMapObjects | ForEach-Object { $_['Path'] })
-                                Get-Printer -EA SilentlyContinue | Where-Object { $_.Type -eq 'Connection' -and $_.Name -notin $activePaths } | ForEach-Object {
-                                    $pName  = $_.Name
-                                    $Steps += @{ Name = "Remove stale printer: $pName"; Action = [scriptblock]::Create("Remove-Printer -Name '$($pName -replace "'","''")' -EA SilentlyContinue") }
-                                }
-                            }
-                            else {
-                                $activeLetters = @($FilteredMapObjects | ForEach-Object { $_['Letter'] })
-                                Get-PSDrive -PSProvider FileSystem -EA SilentlyContinue | Where-Object { $_.DisplayRoot -like '\\*' -and $_.Name -notin $activeLetters } | ForEach-Object {
-                                    $dLetter = $_.Name
-                                    $Steps  += @{ Name = "Remove stale drive ${dLetter}:"; Action = [scriptblock]::Create("net use ${dLetter}: /delete 2>&1 | Out-Null") }
-                                }
-                            }
-                        }
-                        if ($Steps.Count -gt 0) { Show-ProgressGUI -Steps $Steps -NoGUI:($CTX.CTXNoGUISupport -or -not $EndUserGUI) -Title $TaskName -Heading "Mapping $($ObjectType)s..." }
-                        else { Write-Host "No $ObjectType mappings applicable for current user" }
+                        & $WorkflowScript -ShowGui ($EndUserGUI -and -not $CTX.CTXNoGUISupport)
                         $ScriptExitCode = 0
                     }
                 }
-            # ==============================================================================================================================================    
-            # ==========> Scheduled Task (Execute the user workflow to map resources)<======================================================================
-            # ==============================================================================================================================================
-                'ScheduledTask' { # This is the code path that runs when the scheduled task executes (or when a manual run detects the task and invokes the worker script with GUI override)
-                    $procOverride       = [System.Environment]::GetEnvironmentVariable('MapperShowGUI') -eq '1'
-                    $userOverride       = [System.Environment]::GetEnvironmentVariable('MapperShowGUI', 'User') -eq '1'
-                    $oneShot            = $EndUserGUI -and ($procOverride -or $userOverride)
+    # ==========> Scheduled Task (Execute the user workflow to map resources)<======================================================================
+                'ScheduledTask' {
+                    $procOverride = [System.Environment]::GetEnvironmentVariable('MapperShowGUI') -eq '1'
+                    $userOverride = [System.Environment]::GetEnvironmentVariable('MapperShowGUI', 'User') -eq '1'
+                    $oneShot      = $EndUserGUI -and ($procOverride -or $userOverride)
                     if ($procOverride) { [System.Environment]::SetEnvironmentVariable('MapperShowGUI', $null) }
-                    if ($userOverride) {
-                        try {
-                            $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
-                            if ($envKey) {
-                                try { $envKey.DeleteValue('MapperShowGUI', $false) } finally { $envKey.Close() }
-                            }
-                        } catch { Write-Verbose "Failed to delete user-scope MapperShowGUI from registry: $_" }
-                    }
-                    write-Verbose "Scheduled task execution with GUI $(if ($oneShot) { 'enabled' } else { 'disabled' })"
-                    $dcOk               = $true
-                    $UserGroups         = Get-ADGroupMemberships -Domain $DomainName -RequiredGroups $RequiredGroups -DCAvailable ([ref]$dcOk)
-                    if (-not $dcOk) {
-                        $dcMsg = $DomainName
-                        if ($oneShot) {
-                            Show-ProgressGUI -Steps @(@{ Name = "Domain network not available"; Action = [scriptblock]::Create("Write-Warning 'No domain controller was reachable for ''$dcMsg''. Network drive/printer mappings are skipped.'") }) -Title $TaskName -Heading "Domain network not available" -KeepHeading
-                        }
-                        else {Write-Warning "No domain controller was reachable for '$dcMsg'. Network drive/printer mappings are skipped."}
-                        $ScriptExitCode = 0; break
-                    }
-                    $FilteredMapObjects = @($MapObjects | Where-Object { [string]::IsNullOrEmpty($_['ADGroups']) -or $_['ADGroups'] -in $UserGroups })
-                    $Steps              = @()
-                    foreach ($obj in $FilteredMapObjects) {
-                        if ($ObjectType -eq 'Printer') {
-                            $Steps += @{
-                                Name   = "Map Printer: $($obj.PrinterName)"
-                                Action = [scriptblock]::Create("New-PrinterMapping -PrinterName '$($obj.PrinterName -replace "'","''")' -PrinterPath '$($obj.Path -replace "'","''")' -PrinterDefault `$$($obj.Default.ToString().ToLower())")
-                            }
-                        }
-                        else {
-                            $label      = if ($obj.ContainsKey('Label'))      { $obj.Label }      else { '' }
-                            $persistent = if ($obj.ContainsKey('Persistent')) { $obj.Persistent } else { $true }
-                            $Steps += @{
-                                Name   = "Map Drive $($obj.Letter):"
-                                Action = [scriptblock]::Create("New-DriveMapping -DriveLetter '$($obj.Letter)' -DrivePath '$($obj.Path -replace "'","''")' -DriveLabel '$($label -replace "'","''")' -DrivePersistent `$$($persistent.ToString().ToLower())")
-                            }
-                        }
-                    }
-                    if ($RemoveStaleObjects) {
-                        if ($ObjectType -eq 'Printer') {
-                            $activePaths = @($FilteredMapObjects | ForEach-Object { $_['Path'] })
-                            Get-Printer -EA SilentlyContinue | Where-Object { $_.Type -eq 'Connection' -and $_.Name -notin $activePaths } | ForEach-Object {
-                                $pName  = $_.Name
-                                $Steps += @{ Name = "Remove stale printer: $pName"; Action = [scriptblock]::Create("Remove-Printer -Name '$($pName -replace "'","''")' -EA SilentlyContinue") }
-                            }
-                        }
-                        else {
-                            $activeLetters = @($FilteredMapObjects | ForEach-Object { $_['Letter'] })
-                            Get-PSDrive -PSProvider FileSystem -EA SilentlyContinue | Where-Object { $_.DisplayRoot -like '\\*' -and $_.Name -notin $activeLetters } | ForEach-Object {
-                                $dLetter = $_.Name
-                                $Steps  += @{ Name = "Remove stale drive ${dLetter}:"; Action = [scriptblock]::Create("net use ${dLetter}: /delete 2>&1 | Out-Null") }
-                            }
-                        }
-                    }
-                    if ($Steps.Count -gt 0) { Show-ProgressGUI -Steps $Steps -NoGUI:(-not $oneShot) -Title $TaskName -Heading "Mapping $($ObjectType)s..." }
-                    else { Write-Host "No $ObjectType mappings applicable for current user" }
+                    if ($userOverride) { & $ClearUserGuiFlag }
+                    Write-Verbose "Scheduled task execution with GUI $(if ($oneShot) { 'enabled' } else { 'disabled' })"
+                    & $WorkflowScript -ShowGui $oneShot
                     $ScriptExitCode = 0
                 }
             }
         }
     }
 }
-catch {
-    $ScriptExitCode = 9
-    Write-Error "Unhandled error in script: $($_.Exception.Message)"
-}
+catch [System.ArgumentException] {Write-Error $_.Exception.Message; $ScriptExitCode = 7}
+catch {Write-Error "Unhandled error in script: $($_.Exception.Message)"; $ScriptExitCode = 9}
 finally {
-    write-Verbose "Completed $($ExecutionMode) execution with installtype $($Installtype) as $($CTX.CTXIdentity) completed with exit code $ScriptExitCode. Cleaning up environment..."
+    # $CTX is assigned inside the try; guard against StrictMode failures when Get-RuntimeContext threw before assignment or returned $null.
+    $ctxIdentityForLog = if ($CTX -and $CTX.PSObject.Properties['CTXIdentity']) { $CTX.CTXIdentity } else { 'Unknown' }
+    Write-Verbose "Completed $ExecutionMode execution with installtype $InstallType as $ctxIdentityForLog completed with exit code $ScriptExitCode. Cleaning up environment..."
     # Restore original preference settings
     try { $ErrorActionPreference = $script:OriginalErrorActionPreference } catch {}
     try { $VerbosePreference     = $script:OriginalVerbosePreference } catch {}
@@ -2862,9 +2970,7 @@ finally {
     catch { $ScriptLog = @("Logger shutdown failed: $($_.Exception.Message)") }
 }
 # If the script was run in detection mode, return a simple compliant/non-compliant message that can be parsed by Intune, otherwise just exit with the appropriate exitcode
-if ($EmitDetectOutput) {
-    if ($compliant) { Write-Output "Compliant: $TaskName v$MappingVersion" }
-    else { Write-Output "Non-Compliant - $($ScriptLog -join "`n")" }
-}
+if ($EmitDetectOutput) { if ($compliant) { Write-Output "Compliant: $TaskName v$MappingVersion" }
+    else { Write-Output "Non-Compliant - $($ScriptLog -join "`n")" } }
 exit $ScriptExitCode
 #endregion
