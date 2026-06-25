@@ -1,8 +1,7 @@
-#>
 <#PSScriptInfo
-.VERSION        3.7.0
+.VERSION        3.6.0
 .AUTHOR         @MrTbone_se (T-bone Granheden)
-.GUID           feedbeef-beef-4dad-beef-b628ccca16bd
+.GUID           feedbeef-beef-4dad-beef-b628ccca16be
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
 .TAGS           Intune Graph PrimaryUser DeviceManagement MicrosoftGraph Azure
 .LICENSEURI     https://opensource.org/licenses/MIT
@@ -22,7 +21,6 @@
     3.4.0 2026-06-15 Minor update with a function to remove legacy Mr T-Bone scripts to migrate to the new version
     3.5.0 2026-06-16 Minor update to move redundant tasks to scriptblocks
     3.6.0 2026-06-17 Minor update with adjusted logic for uninstall and detection. If InstallType is Uninstall, Detect will report non-compliant if App exist and remediation will uninstall
-    3.7.0 2026-06-25 Minor update to fix ad group discovery and more seamless gui interface for end users and many syntax improvments
 #>
 <#
 .SYNOPSIS
@@ -112,7 +110,7 @@ param(
 
 	# ==========> Add Application to Add Remove Program (Add-AddRemoveProgram) <===========================================
 	[Parameter(Mandatory = $false, HelpMessage = 'Name of the application/script being wrapped')]
-	[String]$ARPAppName = "Map Drives",
+	[String]$ARPAppName = "Map Printers",
 
 	[Parameter(Mandatory = $false, HelpMessage = 'Company name used for naming of folders and registry keys')]
 	[String]$ARPAppPublisher = "Billerud",
@@ -147,7 +145,7 @@ param(
 
 	[Parameter(Mandatory = $false, HelpMessage = 'GUID of the application/script being wrapped. NOTE: This needs to be unique for each wrapped app')]
 	[ValidatePattern('^\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}$')]
-	[String]$ARPAppGuid = "{feedbeef-beef-4dad-beef-b628ccca16bd}",
+	[String]$ARPAppGuid = "{feedbeef-beef-4dad-beef-b628ccca16be}",
 
 	[Parameter(Mandatory = $false, HelpMessage = "Application folder path, if not specified, it will use the native 64-bit %ProgramFiles%\ARPPublisher\ARPAppName (via %ProgramW6432% so a 32-bit host does not get redirected to 'Program Files (x86)'). Falls back to %ProgramFiles% on a 32-bit OS where ProgramW6432 is unset.")]
 	[string]$ARPAppFolder = "$(if (${env:ProgramW6432}) { ${env:ProgramW6432} } else { $env:ProgramFiles })\$ARPAppPublisher\$ARPAppName",
@@ -185,11 +183,9 @@ param(
 # Printers:  $MapObjects += @{PrinterName="PrinterName"  ;Default=$true      ;Path="\\printserver\printerName"   ;ADGroups="My Group"}
 # Drives:    $MapObjects += @{Letter="X"                 ;Persistent=$true   ;Path="\\fileserver\fileshare"      ;ADGroups="My Group"    ;Label="My drive"}
 $MapObjects = @()
-$MapObjects += @{Letter = "S"	; Persistent = $true	; Path = "\\t-bone-file.tbone.se\Sales"	       	; ADGroups =	"Sales"	        ; Label = "Sales folder" }
-$MapObjects += @{Letter = "H"	; Persistent = $true	; Path = "\\t-bone-file.tbone.se\HR"           	; ADGroups =	"HR"            ; Label = "HR" }
-$MapObjects += @{Letter = "W"	; Persistent = $true	; Path = "\\t-bone-file.tbone.se\Consultants"	; ADGroups =	"Consultants"	; Label = "Consult" }
-$MapObjects += @{Letter = "G"	; Persistent = $true	; Path = "\\t-bone-file.tbone.se\Common" 	   	; ADGroups =	""              ; Label = "Common" }
-$MapObjects += @{Letter = "V"	; Persistent = $true	; Path = "\\t-bone-dc1.tbone.se\netlogon"	   	; ADGroups =	""              ; Label = "Netlogon" }
+$MapObjects += @{PrinterName =	"Printer1"	; Default = $false	; Path =	"\\T-Bone-Print.tbone.se\Printer1"	; ADGroups =	"Sales" }
+$MapObjects += @{PrinterName =	"Printer2"	; Default = $false	; Path =	"\\T-Bone-Print.tbone.se\Printer2"	; ADGroups =	"Consultant" }
+$MapObjects += @{PrinterName =	"Printer3"	; Default = $true	; Path =	"\\T-Bone-Print.tbone.se\Printer3"	; ADGroups =	"" }
 
 # Add your custom Icon in Base64 format to use for shortcut and add remove programs entry
 $ARPAppCustomIconB64 = ""

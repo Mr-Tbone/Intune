@@ -1,6 +1,6 @@
 #>
 <#PSScriptInfo
-.VERSION        3.7.0
+.VERSION        3.6.0
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16bd
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -22,7 +22,6 @@
     3.4.0 2026-06-15 Minor update with a function to remove legacy Mr T-Bone scripts to migrate to the new version
     3.5.0 2026-06-16 Minor update to move redundant tasks to scriptblocks
     3.6.0 2026-06-17 Minor update with adjusted logic for uninstall and detection. If InstallType is Uninstall, Detect will report non-compliant if App exist and remediation will uninstall
-    3.7.0 2026-06-25 Minor update to fix ad group discovery and more seamless gui interface for end users and many syntax improvments
 #>
 <#
 .SYNOPSIS
