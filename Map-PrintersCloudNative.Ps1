@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION        3.7.0
+.VERSION        3.7.1
 .AUTHOR         @MrTbone_se (T-bone Granheden)
 .GUID           feedbeef-beef-4dad-beef-b628ccca16be
 .COPYRIGHT      (c) 2026 T-bone Granheden. MIT License - free to use with attribution.
@@ -22,6 +22,7 @@
     3.5.0 2026-06-16 Minor update to move redundant tasks to scriptblocks
     3.6.0 2026-06-17 Minor update with adjusted logic for uninstall and detection. If InstallType is Uninstall, Detect will report non-compliant if App exist and remediation will uninstall
     3.7.0 2026-06-25 Minor update to fix ad group discovery and more seamless gui interface for end users and many syntax improvments
+    3.7.1 2026-06-26 fix org name
 #>
 <#
 .SYNOPSIS
@@ -114,7 +115,7 @@ param(
 	[String]$ARPAppName = "Map Printers",
 
 	[Parameter(Mandatory = $false, HelpMessage = 'Company name used for naming of folders and registry keys')]
-	[String]$ARPAppPublisher = "Billerud",
+	[String]$ARPAppPublisher = "T-Bone Consulting",
 
 	[Parameter(Mandatory = $false, HelpMessage = 'Hide the app from Add Remove Programs (SystemComponent) while still writing the registry and files for detection')]
 	[bool]$ARPAppHidden = $False,
@@ -3372,3 +3373,4 @@ if ($EmitDetectOutput) {
 }
 exit $ScriptExitCode
 #endregion
+
