@@ -40,6 +40,7 @@ $registryKeysStatus = @(
 # Os Versions and the required July patch level to be compliant with Secure Boot Update
 $OSversions = @(
     @{ Name='Insider'; Build=26200; Patch=0 }
+    @{ Name='25H2'; Build=27000; Patch=0 }
     @{ Name='24H2'; Build=26100; Patch=1150 }
     @{ Name='23H2'; Build=22631; Patch=3880 }
     @{ Name='22H2'; Build=22621; Patch=3880 }
